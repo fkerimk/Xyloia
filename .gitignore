@@ -52,3 +52,10 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# Xyloia
+
+.idea/
+Folder.DotSettings
+Folder.DotSettings.user
+Raylib Examples/
