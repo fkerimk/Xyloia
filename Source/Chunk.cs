@@ -1,5 +1,8 @@
 ﻿using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using Jitter2.Collision.Shapes;
+using Jitter2.LinearMath;
+using Jitter2.Dynamics;
 using Raylib_cs;
 using static Raylib_cs.Raylib;
 
@@ -14,6 +17,8 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
     private List<List<float>>? _vLists, _nLists, _tLists;
     private List<ushort[]>? _iLists;
+
+    private RigidBody? _body;
 
     private static readonly ThreadLocal<MeshBuilder> Builder = new(() => new MeshBuilder());
 
@@ -81,7 +86,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
             for (var ly = 0; ly < 16; ly++) {
 
-                if (_disposed) return; // Fast exit
+                if (_disposed) return;
 
                 float worldY = Y * 16 + ly;
 
@@ -248,7 +253,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         b.VIdx += 4;
     }
 
-    public unsafe void Upload() {
+    public unsafe void Upload(Jitter2.World physicsWorld) {
 
         List<List<float>>? vLists, nLists, tLists;
         List<ushort[]>? iLists;
@@ -303,11 +308,80 @@ internal class Chunk(int x, int y, int z) : IDisposable {
             ListPool<float>.Return(tList);
         }
 
+        if (_body != null) {
+            physicsWorld.Remove(_body);
+            _body = null;
+        }
+        
         IsDirty = false;
     }
 
-    public void Unload() {
+    public void EnablePhysics(Jitter2.World physicsWorld) {
+
+        if (_body != null) return;
+        if (Meshes.Count == 0) return;
+
+        var meshTriangles = new List<JTriangle>();
+
+        unsafe {
+            foreach (var mesh in Meshes) {
+                
+                var vCount = mesh.VertexCount;
+                var iCount = mesh.TriangleCount * 3;
+
+                var v = mesh.Vertices;
+                var idx = mesh.Indices;
+                
+                if (v == null || idx == null) continue;
+
+                var localVerts = new JVector[vCount];
+
+                for (var i = 0; i < vCount; i++) {
+                    
+                    localVerts[i] = new JVector(v[i * 3], v[i * 3 + 1], v[i * 3 + 2]);
+                }
+
+                for (var i = 0; i < iCount; i += 3) {
+                    
+                    if (idx[i] >= vCount || idx[i+1] >= vCount || idx[i+2] >= vCount) continue;
+
+                    var v1 = localVerts[idx[i]];
+                    var v2 = localVerts[idx[i + 1]];
+                    var v3 = localVerts[idx[i + 2]];
+                    
+                    meshTriangles.Add(new JTriangle(v1, v2, v3));
+                }
+            }
+        }
+
+        if (meshTriangles.Count > 0) {
+            
+            var tm = new TriangleMesh(meshTriangles);
+
+            _body = physicsWorld.CreateRigidBody();
+            _body.Position = new JVector(X * 16, Y * 16, Z * 16);
+            _body.MotionType = MotionType.Static;
+
+            for(var i = 0; i < meshTriangles.Count; i++) {
+                
+                var shape = new TriangleShape(tm, i);
+                _body.AddShape(shape, false);
+            }
+        }
+    }
+
+    public void DisablePhysics(Jitter2.World physicsWorld) {
+
+        if (_body == null) return;
+
+        physicsWorld.Remove(_body);
+        _body = null;
+    }
+
+    public void Unload(Jitter2.World physicsWorld) {
         
+        DisablePhysics(physicsWorld);
+
         lock (_lock) {
             
             if (_vLists != null) {

@@ -15,12 +15,13 @@ internal readonly struct ChunkPos(int x, int y, int z) : IEquatable<ChunkPos> {
 }
 
 // ReSharper disable InconsistentlySynchronizedField
-internal class World {
+internal class World(Jitter2.World physicsWorld) {
 
     private readonly ConcurrentDictionary<ChunkPos, Chunk> _chunks = new();
     private readonly ConcurrentQueue<Chunk> _buildQueue = new();
 
-    private readonly HashSet<ChunkPos> _processingChunks = new();
+    private readonly HashSet<ChunkPos> _processingChunks = [];
+    private readonly HashSet<ChunkPos> _activePhysicsChunks = [];
     private volatile int _activeTaskCount;
 
     private const int ViewDistance = 16;
@@ -29,6 +30,7 @@ internal class World {
     private int _realTimeCamX, _realTimeCamZ;
 
     private static readonly ChunkPos[] ScanOffsets;
+    private static readonly ChunkPos[] PhysicsOffsets;
 
     static World() {
 
@@ -40,6 +42,18 @@ internal class World {
                 offsets.Add(new ChunkPos(x, 0, z));
 
         ScanOffsets = offsets.OrderBy(p => p.X * p.X + p.Z * p.Z).ToArray();
+
+        var physOffsets = new List<ChunkPos>();
+
+        const int physicsRadius = 3;
+
+        for (var x = -physicsRadius; x <= physicsRadius; x++)
+        for (var y = -physicsRadius; y <= physicsRadius; y++)
+        for (var z = -physicsRadius; z <= physicsRadius; z++)
+            if (x * x + y * y + z * z <= physicsRadius * physicsRadius)
+                physOffsets.Add(new ChunkPos(x, y, z));
+
+        PhysicsOffsets = physOffsets.ToArray();
     }
 
     private Chunk? GetChunk(int x, int y, int z) { return _chunks.GetValueOrDefault(new ChunkPos(x, y, z)); }
@@ -157,7 +171,7 @@ internal class World {
 
                 if (_chunks.TryRemove(new ChunkPos(readyChunk.X, readyChunk.Y, readyChunk.Z), out var removed)) {
 
-                    removed.Unload();
+                    removed.Unload(physicsWorld);
                 }
 
                 continue;
@@ -165,7 +179,7 @@ internal class World {
 
             if (!readyChunk.IsDirty) continue;
 
-            readyChunk.Upload();
+            readyChunk.Upload(physicsWorld);
 
             lock (_renderLock) {
 
@@ -200,9 +214,39 @@ internal class World {
                     if (!_chunks.TryRemove(pos, out var chunk)) continue;
 
                     _renderList.Remove(chunk);
-                    chunk.Unload();
+                    chunk.Unload(physicsWorld);
+                    if (_activePhysicsChunks.Contains(pos)) _activePhysicsChunks.Remove(pos);
                 }
             }
+        }
+
+        UpdatePhysics(camCx, (int)Math.Floor(cameraPos.Y / 16), camCz);
+    }
+
+    private void UpdatePhysics(int cx, int cy, int cz) {
+
+        var needed = new HashSet<ChunkPos>();
+
+        foreach (var off in PhysicsOffsets) {
+
+            var pos = new ChunkPos(cx + off.X, cy + off.Y, cz + off.Z);
+
+            if (!_chunks.TryGetValue(pos, out var chunk) || chunk.IsDirty) continue;
+
+            needed.Add(pos);
+
+            if (!_activePhysicsChunks.Add(pos)) continue;
+
+            chunk.EnablePhysics(physicsWorld);
+        }
+
+        var toRemove = _activePhysicsChunks.Where(pos => !needed.Contains(pos)).ToList();
+
+        foreach (var pos in toRemove) {
+
+            if (_chunks.TryGetValue(pos, out var chunk)) chunk.DisablePhysics(physicsWorld);
+
+            _activePhysicsChunks.Remove(pos);
         }
     }
 
@@ -267,7 +311,7 @@ internal class World {
 
     public void Unload() {
 
-        foreach (var chunk in _chunks.Values) chunk.Unload();
+        foreach (var chunk in _chunks.Values) chunk.Unload(physicsWorld);
         _chunks.Clear();
 
         lock (_renderLock) {

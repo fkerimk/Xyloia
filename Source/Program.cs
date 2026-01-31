@@ -7,8 +7,9 @@ internal static class Program {
     public static int Main() {
 
         SetTraceLogLevel(TraceLogLevel.Warning);
+
         InitWindow(1600, 900, "Xyloia");
-        
+
         SetTargetFPS(GetMonitorRefreshRate(GetCurrentMonitor()));
 
         Registry.Initialize("Assets/Textures/Grass.png", "Assets/Textures/Dirt.png", "Assets/Textures/Sand.png");
@@ -16,7 +17,8 @@ internal static class Program {
         var material = LoadMaterialDefault();
         SetMaterialTexture(ref material, MaterialMapIndex.Albedo, Registry.AtlasTexture);
 
-        var world = new World();
+        var physicsWorld = new Jitter2.World();
+        var world = new World(physicsWorld);
 
         var cam = new Camera3D {
             FovY = 90,
@@ -26,20 +28,59 @@ internal static class Program {
             Projection = CameraProjection.Perspective,
         };
 
+        var controller = new PlayerController(physicsWorld, cam.Position);
+        var freeCamMode = false;
+
         var initialDir = Vector3.Normalize(cam.Target - cam.Position);
         var pitch = (float)Math.Asin(initialDir.Y);
         var yaw = (float)Math.Atan2(initialDir.Z, initialDir.X);
 
+        const float physicsStep = 1.0f / 60.0f;
+        double accumulator = 0;
+
+        DisableCursor();
+        
         while (!WindowShouldClose()) {
 
             var dt = GetFrameTime();
 
+            // Fixed Physics Step
+            accumulator += dt;
+
+            while (accumulator >= physicsStep) {
+
+                if (!freeCamMode) controller.FixedUpdate();
+
+                physicsWorld.Step(physicsStep);
+                accumulator -= physicsStep;
+            }
+
             world.Update(cam.Position);
 
-            if (IsMouseButtonPressed(MouseButton.Right)) DisableCursor();
-            if (IsMouseButtonReleased(MouseButton.Right)) EnableCursor();
+            // Toggle camera
+            if (IsKeyPressed(KeyboardKey.F)) {
 
-            if (IsMouseButtonDown(MouseButton.Right)) {
+                freeCamMode = !freeCamMode;
+
+                if (freeCamMode) {
+
+                    // Switch to free cam
+                    cam.Position = controller.CameraPosition;
+                    var direction = controller.GetCameraTarget() - cam.Position;
+                    direction = Vector3.Normalize(direction);
+                    pitch = (float)Math.Asin(direction.Y);
+                    yaw = (float)Math.Atan2(direction.Z, direction.X);
+
+                } else {
+
+                    // Switch to character
+                    controller.Body.Position = new Jitter2.LinearMath.JVector(cam.Position.X, cam.Position.Y - 0.8f, cam.Position.Z);
+                    controller.SetRotation(yaw, pitch);
+                    controller.ResetInput();
+                }
+            }
+
+            if (freeCamMode) {
 
                 var md = GetMouseDelta();
                 yaw += md.X * 0.005f;
@@ -57,7 +98,14 @@ internal static class Program {
                 if (IsKeyDown(KeyboardKey.D)) cam.Position += rgt * speed * dt;
                 if (IsKeyDown(KeyboardKey.E)) cam.Position += Vector3.UnitY * speed * dt;
                 if (IsKeyDown(KeyboardKey.Q)) cam.Position -= Vector3.UnitY * speed * dt;
+
                 cam.Target = cam.Position + dir;
+
+            } else {
+
+                controller.FrameUpdate();
+                cam.Position = controller.CameraPosition;
+                cam.Target = controller.GetCameraTarget();
             }
 
             BeginDrawing();
@@ -68,6 +116,8 @@ internal static class Program {
             EndMode3D();
 
             DrawFPS(10, 10);
+            DrawText(freeCamMode ? "[F] Free Cam" : "[F] Character", 10, 40, 20, Color.Black);
+
             EndDrawing();
         }
 
