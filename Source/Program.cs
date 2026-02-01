@@ -28,6 +28,9 @@ internal static class Program {
         };
 
         var controller = new PlayerController(world, cam.Position);
+        var interaction = new InteractionSystem(world);
+        interaction.Initialize();
+        
         var freeCamMode = false;
 
         var initialDir = Vector3.Normalize(cam.Target - cam.Position);
@@ -39,8 +42,11 @@ internal static class Program {
         while (!WindowShouldClose()) {
 
             var dt = GetFrameTime();
-
-            if (!freeCamMode) controller.FrameUpdate(dt);
+            
+            if (!freeCamMode) {
+                
+                controller.FrameUpdate(dt);
+            }
 
             world.Update(cam.Position);
 
@@ -77,12 +83,13 @@ internal static class Program {
                 var dir = new Vector3((float)(Math.Cos(yaw) * Math.Cos(pitch)), (float)Math.Sin(pitch), (float)(Math.Sin(yaw) * Math.Cos(pitch)));
                 var fwd = Vector3.Normalize(dir with { Y = 0 });
                 var rgt = Vector3.Normalize(Vector3.Cross(fwd, Vector3.UnitY));
-
+                
                 var speed = IsKeyDown(KeyboardKey.LeftShift) ? 120f : 40f;
                 if (IsKeyDown(KeyboardKey.W)) cam.Position += fwd * speed * dt;
                 if (IsKeyDown(KeyboardKey.S)) cam.Position -= fwd * speed * dt;
                 if (IsKeyDown(KeyboardKey.A)) cam.Position -= rgt * speed * dt;
                 if (IsKeyDown(KeyboardKey.D)) cam.Position += rgt * speed * dt;
+
                 if (IsKeyDown(KeyboardKey.E)) cam.Position += Vector3.UnitY * speed * dt;
                 if (IsKeyDown(KeyboardKey.Q)) cam.Position -= Vector3.UnitY * speed * dt;
 
@@ -93,13 +100,19 @@ internal static class Program {
                 cam.Position = controller.CameraPosition;
                 cam.Target = controller.GetCameraTarget();
             }
+            
+            var camDir = Vector3.Normalize(cam.Target - cam.Position);
+            interaction.Update(cam.Position, camDir);
 
             BeginDrawing();
             ClearBackground(new Color(135, 206, 235, 255));
 
             BeginMode3D(cam);
             world.Render(cam, material);
+            interaction.Draw3D();
             EndMode3D();
+
+            interaction.DrawUi();
 
             DrawFPS(10, 10);
             DrawText(freeCamMode ? "[F] Free Cam" : "[F] Character", 10, 40, 20, Color.Black);

@@ -58,10 +58,10 @@ internal class World {
 
         return chunk.GetBlock(lx, ly, lz);
     }
-    
+
     // Simple AABB vs World Collision Helper
     public bool GetAabbCollision(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
-        
+
         var x0 = (int)Math.Floor(minX);
         var x1 = (int)Math.Floor(maxX);
         var y0 = (int)Math.Floor(minY);
@@ -72,11 +72,155 @@ internal class World {
         for (var x = x0; x <= x1; x++)
         for (var y = y0; y <= y1; y++)
         for (var z = z0; z <= z1; z++) {
-            
+
             if (GetBlock(x, y, z).Solid) return true;
         }
 
         return false;
+    }
+
+    public void SetBlock(int x, int y, int z, byte blockId) {
+
+        var cx = x >> 4;
+        var cy = y >> 4;
+        var cz = z >> 4;
+        var lx = x & 15;
+        var ly = y & 15;
+        var lz = z & 15;
+
+        if (_chunks.TryGetValue(new ChunkPos(cx, cy, cz), out var chunk)) {
+
+            chunk.SetBlock(lx, ly, lz, new Block(blockId));
+
+            RebuildChunk(chunk);
+
+            if (lx == 0) RebuildChunkAt(cx - 1, cy, cz);
+            if (lx == 15) RebuildChunkAt(cx + 1, cy, cz);
+            if (ly == 0) RebuildChunkAt(cx, cy - 1, cz);
+            if (ly == 15) RebuildChunkAt(cx, cy + 1, cz);
+            if (lz == 0) RebuildChunkAt(cx, cy, cz - 1);
+            if (lz == 15) RebuildChunkAt(cx, cy, cz + 1);
+        }
+    }
+
+    private void RebuildChunkAt(int cx, int cy, int cz) {
+
+        if (_chunks.TryGetValue(new ChunkPos(cx, cy, cz), out var chunk)) RebuildChunk(chunk);
+    }
+
+    private void RebuildChunk(Chunk chunk) {
+        Task.Run(() => {
+
+                var nx = GetChunk(chunk.X - 1, chunk.Y, chunk.Z);
+                var px = GetChunk(chunk.X + 1, chunk.Y, chunk.Z);
+                var ny = GetChunk(chunk.X, chunk.Y - 1, chunk.Z);
+                var py = GetChunk(chunk.X, chunk.Y + 1, chunk.Z);
+                var nz = GetChunk(chunk.X, chunk.Y, chunk.Z - 1);
+                var pz = GetChunk(chunk.X, chunk.Y, chunk.Z + 1);
+
+                chunk.BuildArrays(nx, px, ny, py, nz, pz);
+                _buildQueue.Enqueue(chunk);
+            }
+        );
+    }
+
+    public struct RaycastResult {
+        public bool Hit;
+        public int X, Y, Z;
+        public int FaceX, FaceY, FaceZ;
+        public byte BlockId;
+    }
+
+    public RaycastResult Raycast(Vector3 origin, Vector3 direction, float maxDistance) {
+
+        var x = (int)Math.Floor(origin.X);
+        var y = (int)Math.Floor(origin.Y);
+        var z = (int)Math.Floor(origin.Z);
+
+        var stepX = Math.Sign(direction.X);
+        var stepY = Math.Sign(direction.Y);
+        var stepZ = Math.Sign(direction.Z);
+
+        var tDeltaX = stepX != 0 ? 1f / Math.Abs(direction.X) : float.MaxValue;
+        var tDeltaY = stepY != 0 ? 1f / Math.Abs(direction.Y) : float.MaxValue;
+        var tDeltaZ = stepZ != 0 ? 1f / Math.Abs(direction.Z) : float.MaxValue;
+
+        var tMaxX = stepX > 0 ? (x + 1 - origin.X) * tDeltaX : (origin.X - x) * tDeltaX;
+        var tMaxY = stepY > 0 ? (y + 1 - origin.Y) * tDeltaY : (origin.Y - y) * tDeltaY;
+        var tMaxZ = stepZ > 0 ? (z + 1 - origin.Z) * tDeltaZ : (origin.Z - z) * tDeltaZ;
+
+        if (float.IsNaN(tMaxX)) tMaxX = float.MaxValue;
+        if (float.IsNaN(tMaxY)) tMaxY = float.MaxValue;
+        if (float.IsNaN(tMaxZ)) tMaxZ = float.MaxValue;
+
+        var faceX = 0;
+        var faceY = 0;
+        var faceZ = 0;
+
+        float distance = 0;
+
+        while (distance <= maxDistance) {
+
+            var block = GetBlock(x, y, z);
+
+            if (block.Solid) {
+
+                return new RaycastResult {
+                    Hit = true,
+                    X = x,
+                    Y = y,
+                    Z = z,
+                    FaceX = faceX,
+                    FaceY = faceY,
+                    FaceZ = faceZ,
+                    BlockId = block.Id
+                };
+            }
+
+            if (tMaxX < tMaxY) {
+
+                if (tMaxX < tMaxZ) {
+
+                    x += stepX;
+                    distance = tMaxX;
+                    tMaxX += tDeltaX;
+                    faceX = -stepX;
+                    faceY = 0;
+                    faceZ = 0;
+
+                } else {
+
+                    z += stepZ;
+                    distance = tMaxZ;
+                    tMaxZ += tDeltaZ;
+                    faceX = 0;
+                    faceY = 0;
+                    faceZ = -stepZ;
+                }
+            } else {
+
+                if (tMaxY < tMaxZ) {
+
+                    y += stepY;
+                    distance = tMaxY;
+                    tMaxY += tDeltaY;
+                    faceX = 0;
+                    faceY = -stepY;
+                    faceZ = 0;
+
+                } else {
+
+                    z += stepZ;
+                    distance = tMaxZ;
+                    tMaxZ += tDeltaZ;
+                    faceX = 0;
+                    faceY = 0;
+                    faceZ = -stepZ;
+                }
+            }
+        }
+
+        return new RaycastResult { Hit = false };
     }
 
     public void Update(Vector3 cameraPos) {

@@ -43,6 +43,14 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         return _blocks[(x * 16 + z) * 16 + y];
     }
 
+    public void SetBlock(int x, int y, int z, Block block) {
+
+        if (_blocks == null || x < 0 || x >= 16 || y < 0 || y >= 16 || z < 0 || z >= 16) return;
+
+        _blocks[(x * 16 + z) * 16 + y] = block;
+        IsDirty = true;
+    }
+
     private volatile bool _disposed;
 
     private static class ListPool<T> {
@@ -144,22 +152,22 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 if (_disposed) return false;
 
                 return cx switch {
-                    
+
                     >= 0 and < 16 when cy is >= 0 and < 16 && cz is >= 0 and < 16 => blocks[(cx * 16 + cz) * 16 + cy].Solid,
                     < 0                                                           => nx != null && nx.GetBlock(15, cy, cz).Solid,
                     >= 16                                                         => px != null && px.GetBlock(0, cy, cz).Solid,
-                    
+
                     _ => cy switch {
-                        
+
                         < 0   => ny != null && ny.GetBlock(cx, 15, cz).Solid,
                         >= 16 => py != null && py.GetBlock(cx, 0, cz).Solid,
-                        
+
                         _ => cz switch {
-                            
+
                             < 0   => nz != null && nz.GetBlock(cx, cy, 15).Solid,
                             >= 16 => pz != null && pz.GetBlock(cx, cy, 0).Solid,
-                            
-                            _     => false
+
+                            _ => false
                         }
                     }
                 };
@@ -176,7 +184,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
             if (_disposed) return;
 
             if (_vLists != null) {
-                
+
                 foreach (var l in _vLists) ListPool<float>.Return(l);
                 foreach (var l in _nLists!) ListPool<float>.Return(l);
                 foreach (var l in _tLists!) ListPool<float>.Return(l);
@@ -307,11 +315,11 @@ internal class Chunk(int x, int y, int z) : IDisposable {
     }
 
     public void Unload() {
-        
+
         lock (_lock) {
-            
+
             if (_vLists != null) {
-                
+
                 foreach (var l in _vLists) ListPool<float>.Return(l);
                 foreach (var l in _nLists!) ListPool<float>.Return(l);
                 foreach (var l in _tLists!) ListPool<float>.Return(l);
@@ -360,7 +368,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         if (_blocks == null) return;
 
         System.Buffers.ArrayPool<Block>.Shared.Return(_blocks);
-        
+
         _blocks = null;
     }
 }
