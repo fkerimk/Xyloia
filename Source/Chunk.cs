@@ -8,7 +8,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
     public const int Width = 16;
     public const int Height = 256;
     public const int Depth = 16;
-    
+
     private const int Volume = Width * Height * Depth;
 
     public readonly int X = x, Y = y, Z = z;
@@ -160,42 +160,170 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
             if (builder.VIdx > 60000) Flush(builder, newVLists, newNLists, newTLists, newCLists, newILists);
 
-            var b = blocks[(x * Depth + z) * Height + y];
+            var block = blocks[(x * Depth + z) * Height + y];
 
-            if (!b.Solid) continue;
+            if (!block.Solid) continue;
 
-            var uv = Registry.GetUv(b.Id);
+            var uv = Registry.GetUv(block.Id);
+            var faceLights = new ushort[4];
 
-            if (!IsSolid(x, y, z + 1)) AddFace(builder, x, y, z, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, uv, GetFaceLight(x, y, z + 1));
-            if (!IsSolid(x, y, z - 1)) AddFace(builder, x, y, z, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0, 0, -1, uv, GetFaceLight(x, y, z - 1));
-            if (!IsSolid(x, y + 1, z)) AddFace(builder, x, y, z, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, uv, GetFaceLight(x, y + 1, z));
-            if (!IsSolid(x, y - 1, z)) AddFace(builder, x, y, z, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, -1, 0, uv, GetFaceLight(x, y - 1, z));
-            if (!IsSolid(x + 1, y, z)) AddFace(builder, x, y, z, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, uv, GetFaceLight(x + 1, y, z));
-            if (!IsSolid(x - 1, y, z)) AddFace(builder, x, y, z, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, -1, 0, 0, uv, GetFaceLight(x - 1, y, z));
+            // Directions
+            // Winding: CCW (V1 -> V2 -> V3)
+            // Order: 0:BL, 1:BR, 2:TR, 3:TL
+
+            // Front (Z+)
+            if (!IsSolid(x, y, z + 1)) {
+
+                FillLights(x, y, z + 1, 1, 0, 0, 0, 1, 0, faceLights); // R: X, U: Y
+                AddFace(builder, x, y, z, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, uv, faceLights);
+            }
+
+            // Back (Z-)
+            if (!IsSolid(x, y, z - 1)) {
+
+                FillLights(x, y, z - 1, -1, 0, 0, 0, 1, 0, faceLights); // R: -X, U: Y
+                AddFace(builder, x, y, z, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, -1, uv, faceLights);
+            }
+
+            // Top (Y+)
+            if (!IsSolid(x, y + 1, z)) {
+
+                FillLights(x, y + 1, z, 1, 0, 0, 0, 0, -1, faceLights); // R: X, U: -Z
+                AddFace(builder, x, y, z, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, uv, faceLights);
+            }
+
+            // Bottom (Y-)
+            if (!IsSolid(x, y - 1, z)) {
+
+                FillLights(x, y - 1, z, 1, 0, 0, 0, 0, 1, faceLights); // R: X, U: Z
+                AddFace(builder, x, y, z, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, -1, 0, uv, faceLights);
+            }
+
+            // Right (X+)
+            if (!IsSolid(x + 1, y, z)) {
+
+                FillLights(x + 1, y, z, 0, 0, -1, 0, 1, 0, faceLights); // R: -Z, U: Y
+                AddFace(builder, x, y, z, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 0, uv, faceLights);
+            }
+
+            // Left (-1, 0, 0)
+
+            if (!IsSolid(x - 1, y, z)) {
+
+                FillLights(x - 1, y, z, 0, 0, 1, 0, 1, 0, faceLights); // R: Z, U: Y
+                AddFace(builder, x, y, z, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, -1, 0, 0, uv, faceLights);
+            }
 
             continue;
 
-            ushort GetFaceLight(int cx, int cy, int cz) {
+            void FillLights(int lx, int ly, int lz, int rX, int rY, int rZ, int uX, int uY, int uZ, ushort[] output) {
+
+                if (!QualitySettings.SmoothLighting) {
+
+                    var flat = GetLightSafe(lx, ly, lz);
+                    output[0] = output[1] = output[2] = output[3] = flat;
+
+                    return;
+                }
+
+                // output[0]=BL, output[1]=BR, output[2]=TR, output[3]=TL
+                output[0] = GetVertexLight(lx, ly, lz, -rX - uX, -rY - uY, -rZ - uZ);
+                output[1] = GetVertexLight(lx, ly, lz, rX - uX, rY - uY, rZ - uZ);
+                output[2] = GetVertexLight(lx, ly, lz, rX + uX, rY + uY, rZ + uZ);
+                output[3] = GetVertexLight(lx, ly, lz, -rX + uX, -rY + uY, -rZ + uZ);
+            }
+
+            ushort GetVertexLight(int vx, int vy, int vz, int dx, int dy, int dz) {
+
+                var l1 = GetLightSafe(vx, vy, vz);
+
+                int ax, ay, az, bx, by, bz, cx, cy, cz;
+
+                if (dx == 0) {
+                    ax = vx;
+                    ay = vy + dy;
+                    az = vz;
+                    bx = vx;
+                    by = vy;
+                    bz = vz + dz;
+                    cx = vx;
+                    cy = vy + dy;
+                    cz = vz + dz;
+                } else if (dy == 0) {
+                    ax = vx + dx;
+                    ay = vy;
+                    az = vz;
+                    bx = vx;
+                    by = vy;
+                    bz = vz + dz;
+                    cx = vx + dx;
+                    cy = vy;
+                    cz = vz + dz;
+                } else {
+                    ax = vx + dx;
+                    ay = vy;
+                    az = vz;
+                    bx = vx;
+                    by = vy + dy;
+                    bz = vz;
+                    cx = vx + dx;
+                    cy = vy + dy;
+                    cz = vz;
+                }
+
+                var lA = GetLightSafe(ax, ay, az);
+                var lB = GetLightSafe(bx, by, bz);
+
+                // Occlusion
+                if (IsSolid(ax, ay, az) && IsSolid(bx, by, bz)) {
+
+                    return AverageLight(l1, lA, lB, l1);
+                }
+
+                var lC = GetLightSafe(cx, cy, cz);
+
+                return AverageLight(l1, lA, lB, lC);
+            }
+
+            ushort AverageLight(ushort a, ushort b, ushort c, ushort d) {
+
+                var r = (a & 0xF) + (b & 0xF) + (c & 0xF) + (d & 0xF);
+                var g = ((a >> 4) & 0xF) + ((b >> 4) & 0xF) + ((c >> 4) & 0xF) + ((d >> 4) & 0xF);
+                var bl = ((a >> 8) & 0xF) + ((b >> 8) & 0xF) + ((c >> 8) & 0xF) + ((d >> 8) & 0xF);
+                var s = ((a >> 12) & 0xF) + ((b >> 12) & 0xF) + ((c >> 12) & 0xF) + ((d >> 12) & 0xF);
+
+                return (ushort)(((r + 2) >> 2) | (((g + 2) >> 2) << 4) | (((bl + 2) >> 2) << 8) | (((s + 2) >> 2) << 12));
+            }
+
+            ushort GetLightSafe(int cx, int cy, int cz) {
+
+                if (cx is >= 0 and < Width && cy is >= 0 and < Height && cz is >= 0 and < Depth) return _light![(cx * Depth + cz) * Height + cy];
+
+                switch (cy) {
+
+                    case >= Height: return 0xF000;
+                    case < 0:       return 0;
+                }
+
+                var clx = cx < 0 ? 0 : (cx >= Width ? Width - 1 : cx);
+                var clz = cz < 0 ? 0 : (cz >= Depth ? Depth - 1 : cz);
+                var fallback = _light![(clx * Depth + clz) * Height + cy];
 
                 return cx switch {
 
-                    >= 0 and < Width when cy is >= 0 and < Height && cz is >= 0 and < Depth => _light![(cx * Depth + cz) * Height + cy],
-                    < 0                                                                     => nx?.GetLight(Width - 1, cy, cz) ?? 0,
-                    >= Width                                                                => px?.GetLight(0, cy, cz) ?? 0,
+                    < 0 when cz is < 0 or >= Depth      => fallback,
+                    < 0                                 => nx?.GetLight(Width - 1, cy, cz) ?? fallback,
+                    >= Width when cz is < 0 or >= Depth => fallback,
+                    >= Width                            => px?.GetLight(0, cy, cz) ?? fallback,
 
-                    _ => cy switch {
+                    _ => cz switch {
 
-                        < 0      => ny?.GetLight(cx, Height - 1, cz) ?? 0,
-                        >= Height => py?.GetLight(cx, 0, cz) ?? 0,
-
-                        _ => cz switch {
-
-                            < 0      => nz?.GetLight(cx, cy, Depth - 1) ?? 0,
-                            >= Depth => pz?.GetLight(cx, cy, 0) ?? 0,
-                            _        => 0
-                        }
+                        < 0      => nz?.GetLight(cx, cy, Depth - 1) ?? fallback,
+                        >= Depth => pz?.GetLight(cx, cy, 0) ?? fallback,
+                        _        => 0
                     }
                 };
+
             }
 
             bool IsSolid(int cx, int cy, int cz) {
@@ -210,15 +338,14 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                     _ => cy switch {
 
-                        < 0      => ny != null && ny.GetBlock(cx, Height - 1, cz).Solid,
+                        < 0       => ny != null && ny.GetBlock(cx, Height - 1, cz).Solid,
                         >= Height => py != null && py.GetBlock(cx, 0, cz).Solid,
 
                         _ => cz switch {
 
                             < 0      => nz != null && nz.GetBlock(cx, cy, Depth - 1).Solid,
                             >= Depth => pz != null && pz.GetBlock(cx, cy, 0).Solid,
-
-                            _ => false
+                            _        => false
                         }
                     }
                 };
@@ -231,11 +358,10 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         if (newVLists.Count <= 0) return;
 
         lock (_lock) {
-
+            
             if (_disposed) return;
 
             if (_vLists != null) {
-                
                 foreach (var l in _vLists) ListPool<float>.Return(l);
                 foreach (var l in _nLists!) ListPool<float>.Return(l);
                 foreach (var l in _tLists!) ListPool<float>.Return(l);
@@ -253,7 +379,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
     }
 
     private static void Flush(MeshBuilder b, List<List<float>> v, List<List<float>> n, List<List<float>> t, List<List<byte>> c, List<ushort[]> i) {
-
+        
         if (b.Verts.Count == 0) return;
 
         v.Add(b.Verts);
@@ -261,7 +387,6 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         t.Add(b.Uvs);
         c.Add(b.Colors);
         i.Add(b.Tris.ToArray());
-
         b.Verts = ListPool<float>.Rent();
         b.Norms = ListPool<float>.Rent();
         b.Uvs = ListPool<float>.Rent();
@@ -270,8 +395,8 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         b.VIdx = 0;
     }
 
-    private static void AddFace(MeshBuilder mesh, float ox, float oy, float oz, float x1, float y1, float z1, float x2, float y2, float z2, float x3, float y3, float z3, float x4, float y4, float z4, float nx, float ny, float nz, UvInfo info, ushort light) {
-
+    private static void AddFace(MeshBuilder mesh, float ox, float oy, float oz, float x1, float y1, float z1, float x2, float y2, float z2, float x3, float y3, float z3, float x4, float y4, float z4, float nx, float ny, float nz, UvInfo info, ushort[] lights) {
+        
         mesh.Verts.Add(ox + x1);
         mesh.Verts.Add(oy + y1);
         mesh.Verts.Add(oz + z1);
@@ -285,36 +410,33 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         mesh.Verts.Add(oy + y4);
         mesh.Verts.Add(oz + z4);
 
-        // Light layout: (Bits 0-3: R), (Bits 4-7: G), (Bits 8-11: B), (Bits 12-15: Sky)
-        var rl = light & 0xF;
-        var gl = (light >> 4) & 0xF;
-        var bl = (light >> 8) & 0xF;
-        var sl = (light >> 12) & 0xF;
-
-        var rlf = (float)Math.Pow(0.85, 15 - rl);
-        var glf = (float)Math.Pow(0.85, 15 - gl);
-        var blf = (float)Math.Pow(0.85, 15 - bl);
-        var slf = (float)Math.Pow(0.8, 15 - sl);
-
-        // Combine skylight with colored lights
-        var r = Math.Max(rlf, slf);
-        var g = Math.Max(glf, slf);
-        var b = Math.Max(blf, slf);
-
-        // Ambient floor
-        r = Math.Max(r, 0.05f);
-        g = Math.Max(g, 0.05f);
-        b = Math.Max(b, 0.05f);
-
-        var finalR = (byte)Math.Min(255, r * 255);
-        var finalG = (byte)Math.Min(255, g * 255);
-        var finalB = (byte)Math.Min(255, b * 255);
-
         for (var k = 0; k < 4; k++) {
             
-            mesh.Colors.Add(finalR);
-            mesh.Colors.Add(finalG);
-            mesh.Colors.Add(finalB);
+            var light = QualitySettings.Lighting ? lights[k] : (ushort)0xFFFF;
+            var rl = light & 0xF;
+            var gl = (light >> 4) & 0xF;
+            var bl = (light >> 8) & 0xF;
+            var sl = (light >> 12) & 0xF;
+            var rlf = (float)Math.Pow(0.85, 15 - rl);
+            var glf = (float)Math.Pow(0.85, 15 - gl);
+            var blf = (float)Math.Pow(0.85, 15 - bl);
+            var slf = (float)Math.Pow(0.85, 15 - sl);
+            var r = Math.Max(rlf, slf);
+            var g = Math.Max(glf, slf);
+            var b = Math.Max(blf, slf);
+
+            if (!QualitySettings.ColoredLighting) {
+                
+                var avg = (r + g + b) / 3.0f;
+                r = g = b = avg;
+            }
+
+            r = Math.Max(r, 0.05f);
+            g = Math.Max(g, 0.05f);
+            b = Math.Max(b, 0.05f);
+            mesh.Colors.Add((byte)(r * 255));
+            mesh.Colors.Add((byte)(g * 255));
+            mesh.Colors.Add((byte)(b * 255));
             mesh.Colors.Add(255);
         }
 
@@ -328,18 +450,35 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         mesh.Uvs.Add(info.Y + info.Height);
 
         for (var k = 0; k < 4; k++) {
-
+            
             mesh.Norms.Add(nx);
             mesh.Norms.Add(ny);
             mesh.Norms.Add(nz);
         }
 
-        mesh.Tris.Add(mesh.VIdx);
-        mesh.Tris.Add((ushort)(mesh.VIdx + 1));
-        mesh.Tris.Add((ushort)(mesh.VIdx + 2));
-        mesh.Tris.Add(mesh.VIdx);
-        mesh.Tris.Add((ushort)(mesh.VIdx + 2));
-        mesh.Tris.Add((ushort)(mesh.VIdx + 3));
+        var br0 = (lights[0] & 0xF) + ((lights[0] >> 4) & 0xF) + ((lights[0] >> 8) & 0xF) + ((lights[0] >> 12) & 0xF);
+        var br1 = (lights[1] & 0xF) + ((lights[1] >> 4) & 0xF) + ((lights[1] >> 8) & 0xF) + ((lights[1] >> 12) & 0xF);
+        var br2 = (lights[2] & 0xF) + ((lights[2] >> 4) & 0xF) + ((lights[2] >> 8) & 0xF) + ((lights[2] >> 12) & 0xF);
+        var br3 = (lights[3] & 0xF) + ((lights[3] >> 4) & 0xF) + ((lights[3] >> 8) & 0xF) + ((lights[3] >> 12) & 0xF);
+
+        if (br0 + br2 > br1 + br3) {
+            
+            mesh.Tris.Add(mesh.VIdx);
+            mesh.Tris.Add((ushort)(mesh.VIdx + 1));
+            mesh.Tris.Add((ushort)(mesh.VIdx + 2));
+            mesh.Tris.Add(mesh.VIdx);
+            mesh.Tris.Add((ushort)(mesh.VIdx + 2));
+            mesh.Tris.Add((ushort)(mesh.VIdx + 3));
+            
+        } else {
+            
+            mesh.Tris.Add((ushort)(mesh.VIdx + 0));
+            mesh.Tris.Add((ushort)(mesh.VIdx + 1));
+            mesh.Tris.Add((ushort)(mesh.VIdx + 3));
+            mesh.Tris.Add((ushort)(mesh.VIdx + 1));
+            mesh.Tris.Add((ushort)(mesh.VIdx + 2));
+            mesh.Tris.Add((ushort)(mesh.VIdx + 3));
+        }
 
         mesh.VIdx += 4;
     }

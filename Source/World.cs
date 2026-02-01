@@ -86,6 +86,8 @@ internal class World {
     // Light Propagation
     private void PropagateLights(Queue<(int x, int y, int z)> blockQueue, Queue<(int x, int y, int z)> skyQueue, bool markDirty = true) {
 
+        if (!QualitySettings.Lighting) return;
+
         // Block Light (RGB)
         while (blockQueue.TryDequeue(out var p)) {
 
@@ -117,12 +119,12 @@ internal class World {
                 if (g > 1 && ng < g - 1) { ng = (byte)(g - 1); changed = true; }
                 if (b > 1 && nb < b - 1) { nb = (byte)(b - 1); changed = true; }
 
-                if (changed) {
-                    var newVal = (ushort)((nLight & 0xF000) | nr | (ng << 4) | (nb << 8));
-                    SetLight(nx, ny, nz, newVal);
-                    blockQueue.Enqueue((nx, ny, nz));
-                    if (markDirty) MarkChunkDirty(nx, ny, nz);
-                }
+                if (!changed) continue;
+
+                var newVal = (ushort)((nLight & 0xF000) | nr | (ng << 4) | (nb << 8));
+                SetLight(nx, ny, nz, newVal);
+                blockQueue.Enqueue((nx, ny, nz));
+                if (markDirty) MarkChunkDirty(nx, ny, nz);
             }
         }
 
@@ -166,6 +168,8 @@ internal class World {
     }
 
     private void RemoveLight(int x, int y, int z, bool isBlockLight) {
+        
+        if (!QualitySettings.Lighting) return;
         
         var removeQ = new Queue<(int x, int y, int z, ushort val)>();
         var refillQ = new Queue<(int x, int y, int z)>();
