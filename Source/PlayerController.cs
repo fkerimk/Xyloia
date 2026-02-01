@@ -1,97 +1,184 @@
 using System.Numerics;
-using Jitter2.Dynamics;
-using Jitter2.Collision.Shapes;
-using Jitter2.LinearMath;
 using Raylib_cs;
 
-internal class PlayerController {
+internal class PlayerController(World world, Vector3 position) {
 
-    public RigidBody Body { get; }
-    private const float Speed = 7.5f;
-    private const float JumpSpeed = 5f;
+    public Vector3 Position = position;
+    public Vector3 Velocity;
+    
+    // Player AABB dimensions
+    private const float Width = 0.6f;
+    private const float Height = 1.8f; 
+    private const float EyeHeight = 1.62f;
 
-    public Vector3 CameraPosition => new(Body.Position.X, Body.Position.Y + 1.75f, Body.Position.Z);
+    private const float MoveSpeed = 6.0f;
+    private const float JumpForce = 8.5f;
+    private const float Gravity = 24.0f;
+    private const float Friction = 10.0f;
+    private const float AirControl = 2.0f;
+
+    private const float CoyoteDuration = 0.15f;
+    private const float JumpBufferDuration = 0.1f;
+
+    private float _coyoteTimer;
+    private float _jumpBufferTimer;
+
+    public Vector3 CameraPosition => Position with { Y = Position.Y + EyeHeight };
+    
     private float _yaw;
     private float _pitch;
+    private bool _isGrounded;
 
     public void SetRotation(float yaw, float pitch) {
-
+        
         _yaw = yaw;
         _pitch = pitch;
     }
 
-    private Vector3 _moveInput;
-    private bool _jumpRequested;
-
-    public PlayerController(Jitter2.World world, Vector3 position) {
-
-        var shape = new CapsuleShape(0.25f, 1.75f);
-
-        Body = world.CreateRigidBody();
-        Body.AddShape(shape);
-        Body.Position = new JVector(position.X, position.Y, position.Z);
-
-        Body.Friction = 0.0f;
-        Body.AffectedByGravity = true;
-    }
-
-    public void FrameUpdate() {
-
-        var mouseDelta = Raylib.GetMouseDelta();
-        _yaw += mouseDelta.X * 0.005f;
-        _pitch -= mouseDelta.Y * 0.005f;
-        _pitch = Math.Clamp(_pitch, -1.5f, 1.5f);
+    private void GetInput(out Vector3 moveDir) {
+        
+        moveDir = Vector3.Zero;
 
         var fwd = Vector3.Normalize(new Vector3((float)Math.Cos(_yaw), 0, (float)Math.Sin(_yaw)));
         var right = Vector3.Normalize(Vector3.Cross(fwd, Vector3.UnitY));
 
-        _moveInput = Vector3.Zero;
-        if (Raylib.IsKeyDown(KeyboardKey.W)) _moveInput += fwd;
-        if (Raylib.IsKeyDown(KeyboardKey.S)) _moveInput -= fwd;
-        if (Raylib.IsKeyDown(KeyboardKey.A)) _moveInput -= right;
-        if (Raylib.IsKeyDown(KeyboardKey.D)) _moveInput += right;
+        if (Raylib.IsKeyDown(KeyboardKey.W)) moveDir += fwd;
+        if (Raylib.IsKeyDown(KeyboardKey.S)) moveDir -= fwd;
+        if (Raylib.IsKeyDown(KeyboardKey.A)) moveDir -= right;
+        if (Raylib.IsKeyDown(KeyboardKey.D)) moveDir += right;
 
-        if (Raylib.IsKeyPressed(KeyboardKey.Space)) _jumpRequested = true;
+        if (moveDir.LengthSquared() > 0) moveDir = Vector3.Normalize(moveDir);
     }
 
-    public void ResetInput() {
+    public void FrameUpdate(float dt) {
+        
+        // Mouse Look
+        var mouseDelta = Raylib.GetMouseDelta();
+        _yaw += mouseDelta.X * 0.003f;
+        _pitch -= mouseDelta.Y * 0.003f;
+        _pitch = Math.Clamp(_pitch, -1.55f, 1.55f);
 
-        _moveInput = Vector3.Zero;
-        _jumpRequested = false;
-        Body.Velocity = new JVector(0, Body.Velocity.Y, 0);
+        // Update Timers
+        if (_isGrounded) _coyoteTimer = CoyoteDuration;
+        else _coyoteTimer -= dt;
+
+        _jumpBufferTimer -= dt;
+        if (Raylib.IsKeyPressed(KeyboardKey.Space)) _jumpBufferTimer = JumpBufferDuration;
+
+        GetInput(out var inputDir);
+        
+        // Physics integration
+        ApplyPhysics(inputDir, dt);
     }
 
-    public void FixedUpdate() {
+    private void ApplyPhysics(Vector3 inputDir, float dt) {
 
-        Body.AngularVelocity = JVector.Zero;
+        // Gravity
+        Velocity.Y -= Gravity * dt;
 
-        var moveDir = JVector.Zero;
+        // Movement Logic
+        var targetVel = inputDir * MoveSpeed;
+        
+        // Horizontal Velocity
+        var currentH = new Vector2(Velocity.X, Velocity.Z);
+        var targetH = new Vector2(targetVel.X, targetVel.Z);
 
-        if (_moveInput.LengthSquared() > 0) {
+        var acceleration = _isGrounded ? Friction * 6.0f : AirControl; 
 
-            var input = Vector3.Normalize(_moveInput);
-            moveDir = new JVector(input.X, 0, input.Z) * Speed;
+        // If no input on ground, stop quickly (Snappy)
+        if (_isGrounded && inputDir.LengthSquared() < 0.01f) {
+            acceleration = Friction * 10.0f; 
         }
 
-        Body.Velocity = new JVector(moveDir.X, Body.Velocity.Y, moveDir.Z);
+        // Moves current velocity towards target velocity
+        currentH = Vector2.Lerp(currentH, targetH, Math.Clamp(acceleration * dt, 0, 1));
 
-        if (_jumpRequested) {
+        Velocity.X = currentH.X;
+        Velocity.Z = currentH.Y;
 
-            if (IsGrounded()) {
+        // Jump (Buffered + Coyote)
+        if (_jumpBufferTimer > 0 && _coyoteTimer > 0) {
+            
+            Velocity.Y = JumpForce;
+            _jumpBufferTimer = 0;
+            _coyoteTimer = 0;
+            _isGrounded = false;
+        }
 
-                Body.Velocity = new JVector(Body.Velocity.X, JumpSpeed, Body.Velocity.Z);
+        // Collision & Integration
+        MoveAndSlide(dt);
+    }
+
+    private void MoveAndSlide(float dt) {
+        
+        _isGrounded = false;
+        
+        // X Axis
+        if (Math.Abs(Velocity.X) > 0.001f) {
+            
+            var dx = Velocity.X * dt;
+            
+            if (!TestCollision(Position.X + dx, Position.Y, Position.Z)) {
+                
+                Position.X += dx;
+                
+            } else {
+                
+                Velocity.X = 0; // Bonk
             }
+        }
 
-            _jumpRequested = false;
+        // Z Axis
+        if (Math.Abs(Velocity.Z) > 0.001f) {
+            
+            var dz = Velocity.Z * dt;
+            
+            if (!TestCollision(Position.X, Position.Y, Position.Z + dz)) {
+                
+                Position.Z += dz;
+                
+            } else {
+                
+                Velocity.Z = 0; // Bonk
+            }
+        }
+
+        // Y Axis
+        if (Math.Abs(Velocity.Y) > 0.001f) {
+            
+            var dy = Velocity.Y * dt;
+            
+            if (!TestCollision(Position.X, Position.Y + dy, Position.Z)) {
+                
+                Position.Y += dy;
+                
+            } else {
+                
+                if (Velocity.Y < 0) {
+                    
+                    _isGrounded = true;
+                    Position.Y = (float)Math.Round(Position.Y + dy);
+                }
+
+                Velocity.Y = 0;
+            }
         }
     }
 
-    private bool IsGrounded() { return true; }
+    private bool TestCollision(float x, float y, float z) {
+        
+        var minX = x - Width * 0.5f;
+        var maxX = x + Width * 0.5f;
+        var maxY = y + Height;
+        var minZ = z - Width * 0.5f;
+        var maxZ = z + Width * 0.5f;
+
+        return world.GetAabbCollision(minX, y, minZ, maxX, maxY, maxZ);
+    }
 
     public Vector3 GetCameraTarget() {
 
         var dir = new Vector3((float)(Math.Cos(_yaw) * Math.Cos(_pitch)), (float)Math.Sin(_pitch), (float)(Math.Sin(_yaw) * Math.Cos(_pitch)));
-
         return CameraPosition + dir;
     }
 }

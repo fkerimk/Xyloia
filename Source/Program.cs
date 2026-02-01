@@ -17,8 +17,7 @@ internal static class Program {
         var material = LoadMaterialDefault();
         SetMaterialTexture(ref material, MaterialMapIndex.Albedo, Registry.AtlasTexture);
 
-        var physicsWorld = new Jitter2.World();
-        var world = new World(physicsWorld);
+        var world = new World();
 
         var cam = new Camera3D {
             FovY = 90,
@@ -28,15 +27,12 @@ internal static class Program {
             Projection = CameraProjection.Perspective,
         };
 
-        var controller = new PlayerController(physicsWorld, cam.Position);
+        var controller = new PlayerController(world, cam.Position);
         var freeCamMode = false;
 
         var initialDir = Vector3.Normalize(cam.Target - cam.Position);
         var pitch = (float)Math.Asin(initialDir.Y);
         var yaw = (float)Math.Atan2(initialDir.Z, initialDir.X);
-
-        const float physicsStep = 1.0f / 60.0f;
-        double accumulator = 0;
 
         DisableCursor();
         
@@ -44,16 +40,7 @@ internal static class Program {
 
             var dt = GetFrameTime();
 
-            // Fixed Physics Step
-            accumulator += dt;
-
-            while (accumulator >= physicsStep) {
-
-                if (!freeCamMode) controller.FixedUpdate();
-
-                physicsWorld.Step(physicsStep);
-                accumulator -= physicsStep;
-            }
+            if (!freeCamMode) controller.FrameUpdate(dt);
 
             world.Update(cam.Position);
 
@@ -74,9 +61,9 @@ internal static class Program {
                 } else {
 
                     // Switch to character
-                    controller.Body.Position = new Jitter2.LinearMath.JVector(cam.Position.X, cam.Position.Y - 0.8f, cam.Position.Z);
+                    controller.Position = cam.Position with { Y = cam.Position.Y - 0.8f };
+                    controller.Velocity = Vector3.Zero;
                     controller.SetRotation(yaw, pitch);
-                    controller.ResetInput();
                 }
             }
 
@@ -103,7 +90,6 @@ internal static class Program {
 
             } else {
 
-                controller.FrameUpdate();
                 cam.Position = controller.CameraPosition;
                 cam.Target = controller.GetCameraTarget();
             }
@@ -117,6 +103,7 @@ internal static class Program {
 
             DrawFPS(10, 10);
             DrawText(freeCamMode ? "[F] Free Cam" : "[F] Character", 10, 40, 20, Color.Black);
+            DrawText($"Pos: {controller.Position:F2}", 10, 70, 20, Color.Black);
 
             EndDrawing();
         }

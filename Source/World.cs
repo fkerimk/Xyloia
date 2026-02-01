@@ -15,13 +15,12 @@ internal readonly struct ChunkPos(int x, int y, int z) : IEquatable<ChunkPos> {
 }
 
 // ReSharper disable InconsistentlySynchronizedField
-internal class World(Jitter2.World physicsWorld) {
+internal class World {
 
     private readonly ConcurrentDictionary<ChunkPos, Chunk> _chunks = new();
     private readonly ConcurrentQueue<Chunk> _buildQueue = new();
 
     private readonly HashSet<ChunkPos> _processingChunks = [];
-    private readonly HashSet<ChunkPos> _activePhysicsChunks = [];
     private volatile int _activeTaskCount;
 
     private const int ViewDistance = 16;
@@ -30,7 +29,6 @@ internal class World(Jitter2.World physicsWorld) {
     private int _realTimeCamX, _realTimeCamZ;
 
     private static readonly ChunkPos[] ScanOffsets;
-    private static readonly ChunkPos[] PhysicsOffsets;
 
     static World() {
 
@@ -42,21 +40,44 @@ internal class World(Jitter2.World physicsWorld) {
                 offsets.Add(new ChunkPos(x, 0, z));
 
         ScanOffsets = offsets.OrderBy(p => p.X * p.X + p.Z * p.Z).ToArray();
-
-        var physOffsets = new List<ChunkPos>();
-
-        const int physicsRadius = 3;
-
-        for (var x = -physicsRadius; x <= physicsRadius; x++)
-        for (var y = -physicsRadius; y <= physicsRadius; y++)
-        for (var z = -physicsRadius; z <= physicsRadius; z++)
-            if (x * x + y * y + z * z <= physicsRadius * physicsRadius)
-                physOffsets.Add(new ChunkPos(x, y, z));
-
-        PhysicsOffsets = physOffsets.ToArray();
     }
 
     private Chunk? GetChunk(int x, int y, int z) { return _chunks.GetValueOrDefault(new ChunkPos(x, y, z)); }
+
+    private Block GetBlock(int x, int y, int z) {
+
+        var cx = x >> 4;
+        var cy = y >> 4;
+        var cz = z >> 4;
+
+        if (!_chunks.TryGetValue(new ChunkPos(cx, cy, cz), out var chunk)) return new Block();
+
+        var lx = x & 15;
+        var ly = y & 15;
+        var lz = z & 15;
+
+        return chunk.GetBlock(lx, ly, lz);
+    }
+    
+    // Simple AABB vs World Collision Helper
+    public bool GetAabbCollision(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
+        
+        var x0 = (int)Math.Floor(minX);
+        var x1 = (int)Math.Floor(maxX);
+        var y0 = (int)Math.Floor(minY);
+        var y1 = (int)Math.Floor(maxY);
+        var z0 = (int)Math.Floor(minZ);
+        var z1 = (int)Math.Floor(maxZ);
+
+        for (var x = x0; x <= x1; x++)
+        for (var y = y0; y <= y1; y++)
+        for (var z = z0; z <= z1; z++) {
+            
+            if (GetBlock(x, y, z).Solid) return true;
+        }
+
+        return false;
+    }
 
     public void Update(Vector3 cameraPos) {
 
@@ -171,7 +192,7 @@ internal class World(Jitter2.World physicsWorld) {
 
                 if (_chunks.TryRemove(new ChunkPos(readyChunk.X, readyChunk.Y, readyChunk.Z), out var removed)) {
 
-                    removed.Unload(physicsWorld);
+                    removed.Unload();
                 }
 
                 continue;
@@ -179,7 +200,7 @@ internal class World(Jitter2.World physicsWorld) {
 
             if (!readyChunk.IsDirty) continue;
 
-            readyChunk.Upload(physicsWorld);
+            readyChunk.Upload();
 
             lock (_renderLock) {
 
@@ -214,39 +235,9 @@ internal class World(Jitter2.World physicsWorld) {
                     if (!_chunks.TryRemove(pos, out var chunk)) continue;
 
                     _renderList.Remove(chunk);
-                    chunk.Unload(physicsWorld);
-                    if (_activePhysicsChunks.Contains(pos)) _activePhysicsChunks.Remove(pos);
+                    chunk.Unload();
                 }
             }
-        }
-
-        UpdatePhysics(camCx, (int)Math.Floor(cameraPos.Y / 16), camCz);
-    }
-
-    private void UpdatePhysics(int cx, int cy, int cz) {
-
-        var needed = new HashSet<ChunkPos>();
-
-        foreach (var off in PhysicsOffsets) {
-
-            var pos = new ChunkPos(cx + off.X, cy + off.Y, cz + off.Z);
-
-            if (!_chunks.TryGetValue(pos, out var chunk) || chunk.IsDirty) continue;
-
-            needed.Add(pos);
-
-            if (!_activePhysicsChunks.Add(pos)) continue;
-
-            chunk.EnablePhysics(physicsWorld);
-        }
-
-        var toRemove = _activePhysicsChunks.Where(pos => !needed.Contains(pos)).ToList();
-
-        foreach (var pos in toRemove) {
-
-            if (_chunks.TryGetValue(pos, out var chunk)) chunk.DisablePhysics(physicsWorld);
-
-            _activePhysicsChunks.Remove(pos);
         }
     }
 
@@ -311,7 +302,7 @@ internal class World(Jitter2.World physicsWorld) {
 
     public void Unload() {
 
-        foreach (var chunk in _chunks.Values) chunk.Unload(physicsWorld);
+        foreach (var chunk in _chunks.Values) chunk.Unload();
         _chunks.Clear();
 
         lock (_renderLock) {
