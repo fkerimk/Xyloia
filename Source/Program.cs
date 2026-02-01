@@ -25,6 +25,12 @@ internal static class Program {
         var material = LoadMaterialDefault();
         SetMaterialTexture(ref material, MaterialMapIndex.Albedo, Registry.AtlasTexture);
 
+        var shader = LoadShader("Assets/Shaders/Chunk.vs", "Assets/Shaders/Chunk.fs");
+        
+        material.Shader = shader;
+        
+        var dynLightLoc = GetShaderLocation(shader, "dynLightPos");
+
         var world = new World();
 
         var cam = new Camera3D {
@@ -40,6 +46,7 @@ internal static class Program {
         interaction.Initialize();
 
         var freeCamMode = false;
+        var dynamicLight = false;
 
         var initialDir = Vector3.Normalize(cam.Target - cam.Position);
         var pitch = (float)Math.Asin(initialDir.Y);
@@ -56,6 +63,20 @@ internal static class Program {
             if (!freeCamMode) {
 
                 controller.FrameUpdate(dt);
+            }
+
+            // Dynamic Light Toggle
+            if (IsKeyPressed(KeyboardKey.L)) dynamicLight = !dynamicLight;
+            
+            world.UpdateDynamicLight(cam.Position, dynamicLight);
+            
+            if (dynamicLight) {
+                
+                SetShaderValue(shader, dynLightLoc, cam.Position, ShaderUniformDataType.Vec3);
+                
+            } else {
+                
+                SetShaderValue(shader, dynLightLoc, new Vector3(99999, 99999, 99999), ShaderUniformDataType.Vec3);
             }
 
             world.Update(cam.Position);
@@ -147,6 +168,7 @@ internal static class Program {
         }
 
         world.Unload();
+        UnloadShader(shader);
         CloseWindow();
 
         return 0;

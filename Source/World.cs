@@ -24,6 +24,8 @@ internal class World {
     private readonly HashSet<ChunkPos> _processingChunks = [];
     private volatile int _activeTaskCount;
 
+    private Vector3? _dynamicLightPos;
+
     private const int ViewDistance = 16;
 
     private int _realTimeCamX, _realTimeCamZ;
@@ -488,6 +490,66 @@ internal class World {
         }
 
         return new RaycastResult { Hit = false };
+    }
+
+    public void UpdateDynamicLight(Vector3 camPos, bool enabled) {
+
+        var lx = (int)Math.Floor(camPos.X);
+        var ly = (int)Math.Floor(camPos.Y);
+        var lz = (int)Math.Floor(camPos.Z);
+
+        if (_dynamicLightPos != null) {
+             
+            var ox = (int)Math.Floor(_dynamicLightPos.Value.X);
+            var oy = (int)Math.Floor(_dynamicLightPos.Value.Y);
+            var oz = (int)Math.Floor(_dynamicLightPos.Value.Z);
+
+            if (ox == lx && oy == ly && oz == lz && enabled) return;
+
+            // Remove old light
+            var oldBlock = GetBlock(ox, oy, oz);
+            var oldLum = Registry.GetLuminance(oldBlock.Id);
+            
+            if (oldLum is { R: 0, G: 0, B: 0 }) {
+                
+                RemoveLight(ox, oy, oz, true);
+            }
+        }
+
+        if (enabled) {
+            
+            _dynamicLightPos = camPos;
+            
+            // Add new light
+            var currentBlock = GetBlock(lx, ly, lz);
+
+            if (currentBlock.Solid) return;
+
+            // Torch Color: R=15, G=13, B=10
+            const ushort torchLight = 0xF | (13 << 4) | (10 << 8);
+                
+            // Only overwrite if we are brighter
+            var existing = GetLight(lx, ly, lz);
+                
+            // Merge
+            var r = Math.Max(existing & 0xF, torchLight & 0xF);
+            var g = Math.Max((existing >> 4) & 0xF, (torchLight >> 4) & 0xF);
+            var b = Math.Max((existing >> 8) & 0xF, (torchLight >> 8) & 0xF);
+            var s = (existing >> 12) & 0xF;
+                
+            var newVal = (ushort)(r | (g << 4) | (b << 8) | (s << 12));
+
+            if (newVal == existing) return;
+
+            SetLight(lx, ly, lz, newVal);
+            var q = new Queue<(int, int, int)>();
+            q.Enqueue((lx, ly, lz));
+            PropagateLights(q, new Queue<(int, int, int)>());
+
+        } else {
+            
+            _dynamicLightPos = null;
+        }
     }
 
     public void Update(Vector3 cameraPos) {

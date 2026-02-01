@@ -412,31 +412,10 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
         for (var k = 0; k < 4; k++) {
             
-            var light = QualitySettings.Lighting ? lights[k] : (ushort)0xFFFF;
-            var rl = light & 0xF;
-            var gl = (light >> 4) & 0xF;
-            var bl = (light >> 8) & 0xF;
-            var sl = (light >> 12) & 0xF;
-            var rlf = (float)Math.Pow(0.85, 15 - rl);
-            var glf = (float)Math.Pow(0.85, 15 - gl);
-            var blf = (float)Math.Pow(0.85, 15 - bl);
-            var slf = (float)Math.Pow(0.85, 15 - sl);
-            var r = Math.Max(rlf, slf);
-            var g = Math.Max(glf, slf);
-            var b = Math.Max(blf, slf);
-
-            if (!QualitySettings.ColoredLighting) {
-                
-                var avg = (r + g + b) / 3.0f;
-                r = g = b = avg;
-            }
-
-            r = Math.Max(r, 0.05f);
-            g = Math.Max(g, 0.05f);
-            b = Math.Max(b, 0.05f);
-            mesh.Colors.Add((byte)(r * 255));
-            mesh.Colors.Add((byte)(g * 255));
-            mesh.Colors.Add((byte)(b * 255));
+            var light = lights[k];
+            mesh.Colors.Add((byte)(light & 0xFF));
+            mesh.Colors.Add((byte)((light >> 8) & 0xFF));
+            mesh.Colors.Add(0);
             mesh.Colors.Add(255);
         }
 
