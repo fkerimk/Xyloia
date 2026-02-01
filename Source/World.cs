@@ -19,6 +19,7 @@ internal class World {
 
     private readonly ConcurrentDictionary<ChunkPos, Chunk> _chunks = new();
     private readonly ConcurrentQueue<Chunk> _buildQueue = new();
+    private readonly ConcurrentDictionary<ChunkPos, byte> _pendingRebuilds = new();
 
     private readonly HashSet<ChunkPos> _processingChunks = [];
     private volatile int _activeTaskCount;
@@ -50,13 +51,177 @@ internal class World {
         var cy = y >> 4;
         var cz = z >> 4;
 
-        if (!_chunks.TryGetValue(new ChunkPos(cx, cy, cz), out var chunk)) return new Block();
+        return !_chunks.TryGetValue(new ChunkPos(cx, cy, cz), out var chunk) ? new Block() : chunk.GetBlock(x & 15, y & 15, z & 15);
+    }
 
-        var lx = x & 15;
-        var ly = y & 15;
-        var lz = z & 15;
+    // Lighting
+    private byte GetLight(int x, int y, int z) {
 
-        return chunk.GetBlock(lx, ly, lz);
+        var cx = x >> 4;
+        var cy = y >> 4;
+        var cz = z >> 4;
+
+        return !_chunks.TryGetValue(new ChunkPos(cx, cy, cz), out var chunk) ? (byte)0 : chunk.GetLight(x & 15, y & 15, z & 15);
+    }
+
+    private void SetLight(int x, int y, int z, byte value) {
+
+        var cx = x >> 4;
+        var cy = y >> 4;
+        var cz = z >> 4;
+
+        if (!_chunks.TryGetValue(new ChunkPos(cx, cy, cz), out var chunk)) return;
+
+        chunk.SetLight(x & 15, y & 15, z & 15, value);
+    }
+
+    private byte GetBlockLight(int x, int y, int z) => (byte)(GetLight(x, y, z) & 0xF);
+    private byte GetSkylight(int x, int y, int z) => (byte)((GetLight(x, y, z) >> 4) & 0xF);
+
+    private void SetBlockLight(int x, int y, int z, byte value) {
+
+        var existing = GetLight(x, y, z);
+        SetLight(x, y, z, (byte)((existing & 0xF0) | (value & 0xF)));
+    }
+
+    private void SetSkylight(int x, int y, int z, byte value) {
+
+        var existing = GetLight(x, y, z);
+        SetLight(x, y, z, (byte)((existing & 0x0F) | ((value & 0xF) << 4)));
+    }
+
+    // Light Propagation
+    private void PropagateLights(Queue<(int x, int y, int z)> blockQueue, Queue<(int x, int y, int z)> skyQueue) {
+
+        // Block Light
+        while (blockQueue.TryDequeue(out var p)) {
+
+            var light = GetBlockLight(p.x, p.y, p.z);
+
+            if (light <= 0) continue;
+
+            Span<(int dx, int dy, int dz)> dirs = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)];
+
+            foreach (var d in dirs) {
+
+                int nx = p.x + d.dx, ny = p.y + d.dy, nz = p.z + d.dz;
+
+                if (ny is < 0 or >= WorldHeightChunks * 16) continue;
+
+                var nBlock = GetBlock(nx, ny, nz);
+
+                if (!Registry.IsTranslucent(nBlock.Id)) continue;
+
+                var nLight = GetBlockLight(nx, ny, nz);
+
+                if (nLight >= light - 1) continue;
+
+                SetBlockLight(nx, ny, nz, (byte)(light - 1));
+                blockQueue.Enqueue((nx, ny, nz));
+                MarkChunkDirty(nx, ny, nz);
+            }
+        }
+
+        // Skylight
+        while (skyQueue.TryDequeue(out var p)) {
+
+            var light = GetSkylight(p.x, p.y, p.z);
+
+            if (light <= 0) continue;
+
+            Span<(int dx, int dy, int dz)> dirs = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)];
+
+            foreach (var d in dirs) {
+
+                int nx = p.x + d.dx, ny = p.y + d.dy, nz = p.z + d.dz;
+
+                if (ny is < 0 or >= WorldHeightChunks * 16) continue;
+
+                var nBlock = GetBlock(nx, ny, nz);
+
+                if (!Registry.IsTranslucent(nBlock.Id)) continue;
+
+                var nLight = GetSkylight(nx, ny, nz);
+
+                // Vertical non-decay for Skylight
+                var decay = (d.dy == -1 && light == 15) ? 0 : 1;
+                var newLight = light - decay;
+
+                if (newLight <= nLight) continue;
+
+                SetSkylight(nx, ny, nz, (byte)newLight);
+                skyQueue.Enqueue((nx, ny, nz));
+                MarkChunkDirty(nx, ny, nz);
+            }
+        }
+    }
+
+    private void MarkChunkDirty(int x, int y, int z) {
+
+        var cx = x >> 4;
+        var cy = y >> 4;
+        var cz = z >> 4;
+        var pos = new ChunkPos(cx, cy, cz);
+
+        if (_chunks.ContainsKey(pos)) _pendingRebuilds.TryAdd(pos, 0);
+    }
+
+    private void RemoveLight(int x, int y, int z, bool isBlockLight) {
+
+        var removeQ = new Queue<(int x, int y, int z, byte val)>();
+        var refillQ = new Queue<(int x, int y, int z)>();
+
+        var startVal = isBlockLight ? GetBlockLight(x, y, z) : GetSkylight(x, y, z);
+
+        if (startVal == 0) return;
+
+        if (isBlockLight)
+            SetBlockLight(x, y, z, 0);
+        else
+            SetSkylight(x, y, z, 0);
+
+        removeQ.Enqueue((x, y, z, startVal));
+
+        MarkChunkDirty(x, y, z);
+
+        while (removeQ.TryDequeue(out var p)) {
+
+            Span<(int dx, int dy, int dz)> dirs = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)];
+
+            foreach (var d in dirs) {
+
+                int nx = p.x + d.dx, ny = p.y + d.dy, nz = p.z + d.dz;
+
+                if (ny is < 0 or >= WorldHeightChunks * 16) continue;
+
+                var nVal = isBlockLight ? GetBlockLight(nx, ny, nz) : GetSkylight(nx, ny, nz);
+
+                if (nVal == 0) continue;
+
+                var decay = (isBlockLight == false && d.dy == -1 && p.val == 15) ? 0 : 1;
+
+                if (nVal == p.val - decay || (p.val == 15 && nVal == 15 && decay == 0)) {
+
+                    if (isBlockLight)
+                        SetBlockLight(nx, ny, nz, 0);
+                    else
+                        SetSkylight(nx, ny, nz, 0);
+
+                    removeQ.Enqueue((nx, ny, nz, nVal));
+
+                    MarkChunkDirty(nx, ny, nz);
+
+                } else if (nVal >= p.val) {
+
+                    refillQ.Enqueue((nx, ny, nz));
+                }
+            }
+        }
+
+        if (isBlockLight)
+            PropagateLights(refillQ, new Queue<(int, int, int)>());
+        else
+            PropagateLights(new Queue<(int, int, int)>(), refillQ);
     }
 
     // Simple AABB vs World Collision Helper
@@ -81,6 +246,18 @@ internal class World {
 
     public void SetBlock(int x, int y, int z, byte blockId) {
 
+        var blockPos = new ChunkPos(x >> 4, y >> 4, z >> 4);
+
+        if (!_chunks.ContainsKey(blockPos)) return;
+
+        var oldBlock = GetBlock(x, y, z);
+        var oldLum = Registry.GetLuminance(oldBlock.Id);
+        var newLum = Registry.GetLuminance(blockId);
+        var oldTranslucent = Registry.IsTranslucent(oldBlock.Id);
+        var newTranslucent = Registry.IsTranslucent(blockId);
+
+        if (oldBlock.Id == blockId) return;
+
         var cx = x >> 4;
         var cy = y >> 4;
         var cz = z >> 4;
@@ -88,18 +265,84 @@ internal class World {
         var ly = y & 15;
         var lz = z & 15;
 
-        if (_chunks.TryGetValue(new ChunkPos(cx, cy, cz), out var chunk)) {
+        if (!_chunks.TryGetValue(new ChunkPos(cx, cy, cz), out var chunk)) return;
 
-            chunk.SetBlock(lx, ly, lz, new Block(blockId));
+        chunk.SetBlock(lx, ly, lz, new Block(blockId));
 
-            RebuildChunk(chunk);
+        // Block Light
+        if (oldLum > 0) {
 
-            if (lx == 0) RebuildChunkAt(cx - 1, cy, cz);
-            if (lx == 15) RebuildChunkAt(cx + 1, cy, cz);
-            if (ly == 0) RebuildChunkAt(cx, cy - 1, cz);
-            if (ly == 15) RebuildChunkAt(cx, cy + 1, cz);
-            if (lz == 0) RebuildChunkAt(cx, cy, cz - 1);
-            if (lz == 15) RebuildChunkAt(cx, cy, cz + 1);
+            RemoveLight(x, y, z, true);
+        }
+
+        if (newLum > 0) {
+
+            SetBlockLight(x, y, z, newLum);
+            var q = new Queue<(int, int, int)>();
+            q.Enqueue((x, y, z));
+            PropagateLights(q, new Queue<(int, int, int)>());
+
+        } else if (newTranslucent != oldTranslucent) {
+
+            // Opacity changed
+            if (newTranslucent) {
+
+                var q = new Queue<(int, int, int)>();
+                Span<(int dx, int dy, int dz)> dirs = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)];
+
+                foreach (var d in dirs) {
+
+                    if (GetBlockLight(x + d.dx, y + d.dy, z + d.dz) > 0) q.Enqueue((x + d.dx, y + d.dy, z + d.dz));
+                }
+
+                PropagateLights(q, new Queue<(int, int, int)>());
+
+            } else {
+
+                if (GetBlockLight(x, y, z) > 0) RemoveLight(x, y, z, true);
+            }
+        }
+
+        // Skylight
+        if (newTranslucent != oldTranslucent) {
+
+            if (newTranslucent) {
+
+                var q = new Queue<(int, int, int)>();
+
+                Span<(int dx, int dy, int dz)> dirs = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)];
+
+                foreach (var d in dirs) {
+
+                    if (GetSkylight(x + d.dx, y + d.dy, z + d.dz) > 0) q.Enqueue((x + d.dx, y + d.dy, z + d.dz));
+                }
+
+                PropagateLights(new Queue<(int, int, int)>(), q);
+
+            } else {
+
+                if (GetSkylight(x, y, z) > 0) RemoveLight(x, y, z, false);
+            }
+        }
+
+        RebuildChunk(chunk);
+
+        switch (lx) {
+
+            case 0:  RebuildChunkAt(cx - 1, cy, cz); break;
+            case 15: RebuildChunkAt(cx + 1, cy, cz); break;
+        }
+
+        switch (ly) {
+
+            case 0:  RebuildChunkAt(cx, cy - 1, cz); break;
+            case 15: RebuildChunkAt(cx, cy + 1, cz); break;
+        }
+
+        switch (lz) {
+
+            case 0:  RebuildChunkAt(cx, cy, cz - 1); break;
+            case 15: RebuildChunkAt(cx, cy, cz + 1); break;
         }
     }
 
@@ -125,6 +368,7 @@ internal class World {
     }
 
     public struct RaycastResult {
+
         public bool Hit;
         public int X, Y, Z;
         public int FaceX, FaceY, FaceZ;
@@ -292,6 +536,51 @@ internal class World {
 
                                 if (_chunks.TryAdd(pos, chunk)) {
 
+                                    // Initial Lighting
+                                    var bQ = new Queue<(int, int, int)>();
+                                    var sQ = new Queue<(int, int, int)>();
+
+                                    // Skylight Initiation
+                                    if (pos.Y == WorldHeightChunks - 1) {
+                                        for (var lx = 0; lx < 16; lx++)
+                                        for (var lz = 0; lz < 16; lz++) {
+                                            chunk.SetLight(lx, 15, lz, (byte)(chunk.GetLight(lx, 15, lz) | 0xF0));
+                                            sQ.Enqueue((pos.X * 16 + lx, pos.Y * 16 + 15, pos.Z * 16 + lz));
+                                        }
+                                    }
+
+                                    // Block Light Initiation (Emitters)
+                                    for (var lx = 0; lx < 16; lx++)
+                                    for (var ly = 0; ly < 16; ly++)
+                                    for (var lz = 0; lz < 16; lz++) {
+
+                                        var b = chunk.GetBlock(lx, ly, lz);
+                                        var lum = Registry.GetLuminance(b.Id);
+
+                                        if (lum <= 0) continue;
+
+                                        SetBlockLight(pos.X * 16 + lx, pos.Y * 16 + ly, pos.Z * 16 + lz, lum);
+                                        bQ.Enqueue((pos.X * 16 + lx, pos.Y * 16 + ly, pos.Z * 16 + lz));
+                                    }
+
+                                    // Pull light from neighbors
+                                    for (var lx = -1; lx <= 16; lx++)
+                                    for (var ly = -1; ly <= 16; ly++)
+                                    for (var lz = -1; lz <= 16; lz++) {
+
+                                        if (lx is >= 0 and < 16 && ly is >= 0 and < 16 && lz is >= 0 and < 16) continue;
+
+                                        var wx = pos.X * 16 + lx;
+                                        var wy = pos.Y * 16 + ly;
+                                        var wz = pos.Z * 16 + lz;
+
+                                        // Don't check unloaded chunks
+                                        if (GetBlockLight(wx, wy, wz) > 0) bQ.Enqueue((wx, wy, wz));
+                                        if (GetSkylight(wx, wy, wz) > 0) sQ.Enqueue((wx, wy, wz));
+                                    }
+
+                                    PropagateLights(bQ, sQ);
+
                                     var nx = GetChunk(pos.X - 1, pos.Y, pos.Z);
                                     var px = GetChunk(pos.X + 1, pos.Y, pos.Z);
                                     var ny = GetChunk(pos.X, pos.Y - 1, pos.Z);
@@ -323,6 +612,17 @@ internal class World {
 
                     break;
                 }
+            }
+        }
+
+        // Process pending rebuilds from lighting updates
+        if (!_pendingRebuilds.IsEmpty) {
+
+            foreach (var pos in _pendingRebuilds.Keys) {
+
+                if (_chunks.TryGetValue(pos, out var c)) RebuildChunk(c);
+
+                _pendingRebuilds.TryRemove(pos, out _);
             }
         }
 

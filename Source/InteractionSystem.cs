@@ -6,7 +6,7 @@ using static Raylib_cs.Raylib;
 internal class InteractionSystem(World world) {
 
     private byte _selectedBlockId = 1;
-    private readonly byte[] _availableBlocks = [1, 2, 3]; // Grass, Dirt, Sand
+    private readonly byte[] _availableBlocks = [1, 2, 3, 4]; // Grass, Dirt, Sand, Glow
     private int _selectionIndex;
 
     private World.RaycastResult _currentHit;

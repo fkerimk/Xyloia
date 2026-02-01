@@ -13,6 +13,8 @@ internal static class Registry {
 
     private static readonly Dictionary<string, byte> BlockIds = [];
     private static readonly UvInfo[] Uvv = new UvInfo[256];
+    private static readonly byte[] Luminance = new byte[256];
+    private static readonly bool[] Translucent = new bool[256];
     public static Texture2D AtlasTexture;
 
     public static void Initialize(params string[] texturePaths) {
@@ -47,12 +49,14 @@ internal static class Registry {
 
             BlockIds[name] = id;
             Uvv[id] = new UvInfo { X = (float)currentX / totalWidth, Y = 0, Width = (float)img.Width / totalWidth, Height = (float)img.Height / maxHeight };
+            Translucent[id] = false; // Default to solid/opaque
 
             currentX += img.Width;
             UnloadImage(img);
         }
 
         Uvv[0] = new UvInfo { X = 0, Y = 0, Width = 0, Height = 0 };
+        Translucent[0] = true; // Air is translucent
 
         AtlasTexture = LoadTextureFromImage(atlasImg);
 
@@ -63,4 +67,10 @@ internal static class Registry {
     public static UvInfo GetUv(byte id) => Uvv[id];
 
     public static byte GetId(string name) => BlockIds.GetValueOrDefault(name, (byte)0);
+
+    public static byte GetLuminance(byte id) => Luminance[id];
+    public static void SetLuminance(byte id, byte value) => Luminance[id] = value;
+    
+    public static bool IsTranslucent(byte id) => Translucent[id];
+    public static void SetTranslucent(byte id, bool value) => Translucent[id] = value;
 }

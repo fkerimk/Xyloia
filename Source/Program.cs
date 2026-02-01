@@ -12,7 +12,8 @@ internal static class Program {
 
         SetTargetFPS(GetMonitorRefreshRate(GetCurrentMonitor()));
 
-        Registry.Initialize("Assets/Textures/Grass.png", "Assets/Textures/Dirt.png", "Assets/Textures/Sand.png");
+        Registry.Initialize("Assets/Textures/Grass.png", "Assets/Textures/Dirt.png", "Assets/Textures/Sand.png", "Assets/Textures/Glow.png");
+        Registry.SetLuminance(Registry.GetId("glow"), 15);
 
         var material = LoadMaterialDefault();
         SetMaterialTexture(ref material, MaterialMapIndex.Albedo, Registry.AtlasTexture);

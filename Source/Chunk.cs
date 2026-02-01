@@ -9,10 +9,12 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
     public readonly List<Mesh> Meshes = [];
     private Block[]? _blocks = System.Buffers.ArrayPool<Block>.Shared.Rent(4096);
+    private byte[]? _light = System.Buffers.ArrayPool<byte>.Shared.Rent(4096);
 
     private readonly Lock _lock = new();
 
     private List<List<float>>? _vLists, _nLists, _tLists;
+    private List<List<byte>>? _cLists;
     private List<ushort[]>? _iLists;
 
     private static readonly ThreadLocal<MeshBuilder> Builder = new(() => new MeshBuilder());
@@ -22,6 +24,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         public List<float> Verts = new(4096);
         public List<float> Norms = new(4096);
         public List<float> Uvs = new(2048);
+        public List<byte> Colors = new(4096);
         public readonly List<ushort> Tris = new(2048);
 
         public ushort VIdx;
@@ -31,6 +34,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
             Verts.Clear();
             Norms.Clear();
             Uvs.Clear();
+            Colors.Clear();
             Tris.Clear();
             VIdx = 0;
         }
@@ -48,6 +52,21 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         if (_blocks == null || x < 0 || x >= 16 || y < 0 || y >= 16 || z < 0 || z >= 16) return;
 
         _blocks[(x * 16 + z) * 16 + y] = block;
+        IsDirty = true;
+    }
+
+    public byte GetLight(int x, int y, int z) {
+
+        if (_light == null || x < 0 || x >= 16 || y < 0 || y >= 16 || z < 0 || z >= 16) return 0;
+
+        return _light[(x * 16 + z) * 16 + y];
+    }
+
+    public void SetLight(int x, int y, int z, byte val) {
+
+        if (_light == null || x < 0 || x >= 16 || y < 0 || y >= 16 || z < 0 || z >= 16) return;
+
+        _light[(x * 16 + z) * 16 + y] = val;
         IsDirty = true;
     }
 
@@ -106,6 +125,8 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 blocks[(lx * 16 + lz) * 16 + ly] = new Block(blockId);
             }
         }
+
+        if (_light != null) Array.Clear(_light, 0, _light.Length);
     }
 
     public volatile bool IsDirty;
@@ -120,6 +141,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         var newVLists = new List<List<float>>();
         var newNLists = new List<List<float>>();
         var newTLists = new List<List<float>>();
+        var newCLists = new List<List<byte>>();
         var newILists = new List<ushort[]>();
 
         var blocks = _blocks;
@@ -130,7 +152,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
             if (_disposed) return;
 
-            if (builder.VIdx > 60000) Flush(builder, newVLists, newNLists, newTLists, newILists);
+            if (builder.VIdx > 60000) Flush(builder, newVLists, newNLists, newTLists, newCLists, newILists);
 
             var b = blocks[(x * 16 + z) * 16 + y];
 
@@ -138,14 +160,36 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
             var uv = Registry.GetUv(b.Id);
 
-            if (!IsSolid(x, y, z + 1)) AddFace(builder, x, y, z, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, uv);
-            if (!IsSolid(x, y, z - 1)) AddFace(builder, x, y, z, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0, 0, -1, uv);
-            if (!IsSolid(x, y + 1, z)) AddFace(builder, x, y, z, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, uv);
-            if (!IsSolid(x, y - 1, z)) AddFace(builder, x, y, z, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, -1, 0, uv);
-            if (!IsSolid(x + 1, y, z)) AddFace(builder, x, y, z, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, uv);
-            if (!IsSolid(x - 1, y, z)) AddFace(builder, x, y, z, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, -1, 0, 0, uv);
+            if (!IsSolid(x, y, z + 1)) AddFace(builder, x, y, z, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, uv, GetFaceLight(x, y, z + 1));
+            if (!IsSolid(x, y, z - 1)) AddFace(builder, x, y, z, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0, 0, -1, uv, GetFaceLight(x, y, z - 1));
+            if (!IsSolid(x, y + 1, z)) AddFace(builder, x, y, z, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, uv, GetFaceLight(x, y + 1, z));
+            if (!IsSolid(x, y - 1, z)) AddFace(builder, x, y, z, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, -1, 0, uv, GetFaceLight(x, y - 1, z));
+            if (!IsSolid(x + 1, y, z)) AddFace(builder, x, y, z, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, uv, GetFaceLight(x + 1, y, z));
+            if (!IsSolid(x - 1, y, z)) AddFace(builder, x, y, z, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, -1, 0, 0, uv, GetFaceLight(x - 1, y, z));
 
             continue;
+
+            byte GetFaceLight(int cx, int cy, int cz) {
+                return cx switch {
+
+                    >= 0 and < 16 when cy is >= 0 and < 16 && cz is >= 0 and < 16 => _light![(cx * 16 + cz) * 16 + cy],
+                    < 0                                                           => nx?.GetLight(15, cy, cz) ?? 0,
+                    >= 16                                                         => px?.GetLight(0, cy, cz) ?? 0,
+
+                    _ => cy switch {
+
+                        < 0   => ny?.GetLight(cx, 15, cz) ?? 0,
+                        >= 16 => py?.GetLight(cx, 0, cz) ?? 0,
+
+                        _ => cz switch {
+
+                            < 0   => nz?.GetLight(cx, cy, 15) ?? 0,
+                            >= 16 => pz?.GetLight(cx, cy, 0) ?? 0,
+                            _     => 0
+                        }
+                    }
+                };
+            }
 
             bool IsSolid(int cx, int cy, int cz) {
 
@@ -175,7 +219,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
             }
         }
 
-        Flush(builder, newVLists, newNLists, newTLists, newILists);
+        Flush(builder, newVLists, newNLists, newTLists, newCLists, newILists);
 
         if (newVLists.Count <= 0) return;
 
@@ -184,81 +228,122 @@ internal class Chunk(int x, int y, int z) : IDisposable {
             if (_disposed) return;
 
             if (_vLists != null) {
-
+                
                 foreach (var l in _vLists) ListPool<float>.Return(l);
                 foreach (var l in _nLists!) ListPool<float>.Return(l);
                 foreach (var l in _tLists!) ListPool<float>.Return(l);
+                foreach (var l in _cLists!) ListPool<byte>.Return(l);
             }
 
             _vLists = newVLists;
             _nLists = newNLists;
             _tLists = newTLists;
+            _cLists = newCLists;
             _iLists = newILists;
         }
 
         IsDirty = true;
     }
 
-    private static void Flush(MeshBuilder b, List<List<float>> v, List<List<float>> n, List<List<float>> t, List<ushort[]> i) {
+    private static void Flush(MeshBuilder b, List<List<float>> v, List<List<float>> n, List<List<float>> t, List<List<byte>> c, List<ushort[]> i) {
 
         if (b.Verts.Count == 0) return;
 
         v.Add(b.Verts);
         n.Add(b.Norms);
         t.Add(b.Uvs);
+        c.Add(b.Colors);
         i.Add(b.Tris.ToArray());
 
         b.Verts = ListPool<float>.Rent();
         b.Norms = ListPool<float>.Rent();
         b.Uvs = ListPool<float>.Rent();
+        b.Colors = ListPool<byte>.Rent();
         b.Tris.Clear();
         b.VIdx = 0;
     }
 
-    private static void AddFace(MeshBuilder b, float ox, float oy, float oz, float x1, float y1, float z1, float x2, float y2, float z2, float x3, float y3, float z3, float x4, float y4, float z4, float nx, float ny, float nz, UvInfo info) {
+    private static void AddFace(MeshBuilder mesh, float ox, float oy, float oz, float x1, float y1, float z1, float x2, float y2, float z2, float x3, float y3, float z3, float x4, float y4, float z4, float nx, float ny, float nz, UvInfo info, byte light) {
 
-        b.Verts.Add(ox + x1);
-        b.Verts.Add(oy + y1);
-        b.Verts.Add(oz + z1);
-        b.Verts.Add(ox + x2);
-        b.Verts.Add(oy + y2);
-        b.Verts.Add(oz + z2);
-        b.Verts.Add(ox + x3);
-        b.Verts.Add(oy + y3);
-        b.Verts.Add(oz + z3);
-        b.Verts.Add(ox + x4);
-        b.Verts.Add(oy + y4);
-        b.Verts.Add(oz + z4);
+        mesh.Verts.Add(ox + x1);
+        mesh.Verts.Add(oy + y1);
+        mesh.Verts.Add(oz + z1);
+        mesh.Verts.Add(ox + x2);
+        mesh.Verts.Add(oy + y2);
+        mesh.Verts.Add(oz + z2);
+        mesh.Verts.Add(ox + x3);
+        mesh.Verts.Add(oy + y3);
+        mesh.Verts.Add(oz + z3);
+        mesh.Verts.Add(ox + x4);
+        mesh.Verts.Add(oy + y4);
+        mesh.Verts.Add(oz + z4);
 
-        b.Uvs.Add(info.X);
-        b.Uvs.Add(info.Y);
-        b.Uvs.Add(info.X + info.Width);
-        b.Uvs.Add(info.Y);
-        b.Uvs.Add(info.X + info.Width);
-        b.Uvs.Add(info.Y + info.Height);
-        b.Uvs.Add(info.X);
-        b.Uvs.Add(info.Y + info.Height);
+        // Extract lighting
+        var sl = (light >> 4) & 0xF;
+        var bl = light & 0xF;
+
+        // Curve light for better visual
+        var slf = (float)Math.Pow(0.8, 15 - sl);
+        var blf = (float)Math.Pow(0.8, 15 - bl);
+
+        var combined = Math.Max(slf, blf);
+        var val = (byte)(combined * 255);
+
+        var r = slf;
+        var g = slf;
+        var b = slf;
+
+        r = Math.Max(r, blf * 1.0f); // Yellowish
+        g = Math.Max(g, blf * 0.9f);
+        b = Math.Max(b, blf * 0.6f); // Less blue for warm light
+
+        // Ensure standard ambient
+        r = Math.Max(r, 0.05f);
+        g = Math.Max(g, 0.05f);
+        b = Math.Max(b, 0.05f);
+
+        var finalR = (byte)Math.Min(255, r * 255);
+        var finalG = (byte)Math.Min(255, g * 255);
+        var finalB = (byte)Math.Min(255, b * 255);
+
+        for (var k = 0; k < 4; k++) {
+            
+            mesh.Colors.Add(finalR);
+            mesh.Colors.Add(finalG);
+            mesh.Colors.Add(finalB);
+            mesh.Colors.Add(255);
+        }
+
+        mesh.Uvs.Add(info.X);
+        mesh.Uvs.Add(info.Y);
+        mesh.Uvs.Add(info.X + info.Width);
+        mesh.Uvs.Add(info.Y);
+        mesh.Uvs.Add(info.X + info.Width);
+        mesh.Uvs.Add(info.Y + info.Height);
+        mesh.Uvs.Add(info.X);
+        mesh.Uvs.Add(info.Y + info.Height);
 
         for (var k = 0; k < 4; k++) {
 
-            b.Norms.Add(nx);
-            b.Norms.Add(ny);
-            b.Norms.Add(nz);
+            mesh.Norms.Add(nx);
+            mesh.Norms.Add(ny);
+            mesh.Norms.Add(nz);
         }
 
-        b.Tris.Add(b.VIdx);
-        b.Tris.Add((ushort)(b.VIdx + 1));
-        b.Tris.Add((ushort)(b.VIdx + 2));
-        b.Tris.Add(b.VIdx);
-        b.Tris.Add((ushort)(b.VIdx + 2));
-        b.Tris.Add((ushort)(b.VIdx + 3));
+        mesh.Tris.Add(mesh.VIdx);
+        mesh.Tris.Add((ushort)(mesh.VIdx + 1));
+        mesh.Tris.Add((ushort)(mesh.VIdx + 2));
+        mesh.Tris.Add(mesh.VIdx);
+        mesh.Tris.Add((ushort)(mesh.VIdx + 2));
+        mesh.Tris.Add((ushort)(mesh.VIdx + 3));
 
-        b.VIdx += 4;
+        mesh.VIdx += 4;
     }
 
     public unsafe void Upload() {
 
         List<List<float>>? vLists, nLists, tLists;
+        List<List<byte>>? cLists;
         List<ushort[]>? iLists;
 
         lock (_lock) {
@@ -266,11 +351,13 @@ internal class Chunk(int x, int y, int z) : IDisposable {
             vLists = _vLists;
             nLists = _nLists;
             tLists = _tLists;
+            cLists = _cLists;
             iLists = _iLists;
 
             _vLists = null;
             _nLists = null;
             _tLists = null;
+            _cLists = null;
             _iLists = null;
         }
 
@@ -283,6 +370,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
             var vList = vLists[i];
             var nList = nLists![i];
             var tList = tLists![i];
+            var cList = cLists![i];
             var iArr = iLists![i];
 
             var mesh = new Mesh {
@@ -291,16 +379,19 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 Vertices = (float*)NativeMemory.Alloc((UIntPtr)(vList.Count * sizeof(float))),
                 Normals = (float*)NativeMemory.Alloc((UIntPtr)(nList.Count * sizeof(float))),
                 TexCoords = (float*)NativeMemory.Alloc((UIntPtr)(tList.Count * sizeof(float))),
+                Colors = (byte*)NativeMemory.Alloc((UIntPtr)(cList.Count * sizeof(byte))),
                 Indices = (ushort*)NativeMemory.Alloc((UIntPtr)(iArr.Length * sizeof(ushort)))
             };
 
             var vSpan = CollectionsMarshal.AsSpan(vList);
             var nSpan = CollectionsMarshal.AsSpan(nList);
             var tSpan = CollectionsMarshal.AsSpan(tList);
+            var cSpan = CollectionsMarshal.AsSpan(cList);
 
             fixed (float* v = vSpan) Buffer.MemoryCopy(v, mesh.Vertices, vList.Count * 4, vList.Count * 4);
             fixed (float* n = nSpan) Buffer.MemoryCopy(n, mesh.Normals, nList.Count * 4, nList.Count * 4);
             fixed (float* t = tSpan) Buffer.MemoryCopy(t, mesh.TexCoords, tList.Count * 4, tList.Count * 4);
+            fixed (byte* c = cSpan) Buffer.MemoryCopy(c, mesh.Colors, cList.Count, cList.Count);
             fixed (ushort* idx = iArr) Buffer.MemoryCopy(idx, mesh.Indices, iArr.Length * 2, iArr.Length * 2);
 
             UploadMesh(ref mesh, false);
@@ -309,6 +400,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
             ListPool<float>.Return(vList);
             ListPool<float>.Return(nList);
             ListPool<float>.Return(tList);
+            ListPool<byte>.Return(cList);
         }
 
         IsDirty = false;
@@ -353,6 +445,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
             if (mesh.Vertices != null) NativeMemory.Free(mesh.Vertices);
             if (mesh.Normals != null) NativeMemory.Free(mesh.Normals);
             if (mesh.TexCoords != null) NativeMemory.Free(mesh.TexCoords);
+            if (mesh.Colors != null) NativeMemory.Free(mesh.Colors);
             if (mesh.Indices != null) NativeMemory.Free(mesh.Indices);
         }
 
@@ -368,7 +461,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         if (_blocks == null) return;
 
         System.Buffers.ArrayPool<Block>.Shared.Return(_blocks);
+        System.Buffers.ArrayPool<byte>.Shared.Return(_light!);
 
         _blocks = null;
+        _light = null;
     }
 }
