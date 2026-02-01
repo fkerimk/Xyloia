@@ -5,11 +5,17 @@ using static Raylib_cs.Raylib;
 
 internal class Chunk(int x, int y, int z) : IDisposable {
 
+    public const int Width = 16;
+    public const int Height = 256;
+    public const int Depth = 16;
+    
+    private const int Volume = Width * Height * Depth;
+
     public readonly int X = x, Y = y, Z = z;
 
     public readonly List<Mesh> Meshes = [];
-    private Block[]? _blocks = System.Buffers.ArrayPool<Block>.Shared.Rent(4096);
-    private byte[]? _light = System.Buffers.ArrayPool<byte>.Shared.Rent(4096);
+    private Block[]? _blocks = System.Buffers.ArrayPool<Block>.Shared.Rent(Volume);
+    private byte[]? _light = System.Buffers.ArrayPool<byte>.Shared.Rent(Volume);
 
     private readonly Lock _lock = new();
 
@@ -42,31 +48,31 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
     public Block GetBlock(int x, int y, int z) {
 
-        if (_blocks == null || x < 0 || x >= 16 || y < 0 || y >= 16 || z < 0 || z >= 16) return new Block();
+        if (_blocks == null || x < 0 || x >= Width || y < 0 || y >= Height || z < 0 || z >= Depth) return new Block();
 
-        return _blocks[(x * 16 + z) * 16 + y];
+        return _blocks[(x * Depth + z) * Height + y];
     }
 
     public void SetBlock(int x, int y, int z, Block block) {
 
-        if (_blocks == null || x < 0 || x >= 16 || y < 0 || y >= 16 || z < 0 || z >= 16) return;
+        if (_blocks == null || x < 0 || x >= Width || y < 0 || y >= Height || z < 0 || z >= Depth) return;
 
-        _blocks[(x * 16 + z) * 16 + y] = block;
+        _blocks[(x * Depth + z) * Height + y] = block;
         IsDirty = true;
     }
 
     public byte GetLight(int x, int y, int z) {
 
-        if (_light == null || x < 0 || x >= 16 || y < 0 || y >= 16 || z < 0 || z >= 16) return 0;
+        if (_light == null || x < 0 || x >= Width || y < 0 || y >= Height || z < 0 || z >= Depth) return 0;
 
-        return _light[(x * 16 + z) * 16 + y];
+        return _light[(x * Depth + z) * Height + y];
     }
 
     public void SetLight(int x, int y, int z, byte val) {
 
-        if (_light == null || x < 0 || x >= 16 || y < 0 || y >= 16 || z < 0 || z >= 16) return;
+        if (_light == null || x < 0 || x >= Width || y < 0 || y >= Height || z < 0 || z >= Depth) return;
 
-        _light[(x * 16 + z) * 16 + y] = val;
+        _light[(x * Depth + z) * Height + y] = val;
         IsDirty = true;
     }
 
@@ -97,20 +103,20 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         var grassId = Registry.GetId("grass");
         var dirtId = Registry.GetId("dirt");
 
-        for (var lx = 0; lx < 16; lx++)
-        for (var lz = 0; lz < 16; lz++) {
+        for (var lx = 0; lx < Width; lx++)
+        for (var lz = 0; lz < Depth; lz++) {
 
-            float worldX = X * 16 + lx;
-            float worldZ = Z * 16 + lz;
+            float worldX = X * Width + lx;
+            float worldZ = Z * Depth + lz;
 
             var height = (Noise.Perlin3D(worldX * 0.015f, 0, worldZ * 0.015f) + 1) * 32 + 20;
             height += (Noise.Perlin3D(worldX * 0.05f, 0, worldZ * 0.05f)) * 8;
 
-            for (var ly = 0; ly < 16; ly++) {
+            for (var ly = 0; ly < Height; ly++) {
 
                 if (_disposed) return;
 
-                float worldY = Y * 16 + ly;
+                float worldY = Y * Height + ly;
 
                 byte blockId = 0;
 
@@ -122,7 +128,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                     if (cave > 0.45f) blockId = 0;
                 }
 
-                blocks[(lx * 16 + lz) * 16 + ly] = new Block(blockId);
+                blocks[(lx * Depth + lz) * Height + ly] = new Block(blockId);
             }
         }
 
@@ -146,15 +152,15 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
         var blocks = _blocks;
 
-        for (var x = 0; x < 16; x++)
-        for (var z = 0; z < 16; z++)
-        for (var y = 0; y < 16; y++) {
+        for (var x = 0; x < Width; x++)
+        for (var z = 0; z < Depth; z++)
+        for (var y = 0; y < Height; y++) {
 
             if (_disposed) return;
 
             if (builder.VIdx > 60000) Flush(builder, newVLists, newNLists, newTLists, newCLists, newILists);
 
-            var b = blocks[(x * 16 + z) * 16 + y];
+            var b = blocks[(x * Depth + z) * Height + y];
 
             if (!b.Solid) continue;
 
@@ -172,20 +178,20 @@ internal class Chunk(int x, int y, int z) : IDisposable {
             byte GetFaceLight(int cx, int cy, int cz) {
                 return cx switch {
 
-                    >= 0 and < 16 when cy is >= 0 and < 16 && cz is >= 0 and < 16 => _light![(cx * 16 + cz) * 16 + cy],
-                    < 0                                                           => nx?.GetLight(15, cy, cz) ?? 0,
-                    >= 16                                                         => px?.GetLight(0, cy, cz) ?? 0,
+                    >= 0 and < Width when cy is >= 0 and < Height && cz is >= 0 and < Depth => _light![(cx * Depth + cz) * Height + cy],
+                    < 0                                                                     => nx?.GetLight(Width - 1, cy, cz) ?? 0,
+                    >= Width                                                                => px?.GetLight(0, cy, cz) ?? 0,
 
                     _ => cy switch {
 
-                        < 0   => ny?.GetLight(cx, 15, cz) ?? 0,
-                        >= 16 => py?.GetLight(cx, 0, cz) ?? 0,
+                        < 0      => ny?.GetLight(cx, Height - 1, cz) ?? 0,
+                        >= Height => py?.GetLight(cx, 0, cz) ?? 0,
 
                         _ => cz switch {
 
-                            < 0   => nz?.GetLight(cx, cy, 15) ?? 0,
-                            >= 16 => pz?.GetLight(cx, cy, 0) ?? 0,
-                            _     => 0
+                            < 0      => nz?.GetLight(cx, cy, Depth - 1) ?? 0,
+                            >= Depth => pz?.GetLight(cx, cy, 0) ?? 0,
+                            _        => 0
                         }
                     }
                 };
@@ -197,19 +203,19 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                 return cx switch {
 
-                    >= 0 and < 16 when cy is >= 0 and < 16 && cz is >= 0 and < 16 => blocks[(cx * 16 + cz) * 16 + cy].Solid,
-                    < 0                                                           => nx != null && nx.GetBlock(15, cy, cz).Solid,
-                    >= 16                                                         => px != null && px.GetBlock(0, cy, cz).Solid,
+                    >= 0 and < Width when cy is >= 0 and < Height && cz is >= 0 and < Depth => blocks[(cx * Depth + cz) * Height + cy].Solid,
+                    < 0                                                                     => nx != null && nx.GetBlock(Width - 1, cy, cz).Solid,
+                    >= Width                                                                => px != null && px.GetBlock(0, cy, cz).Solid,
 
                     _ => cy switch {
 
-                        < 0   => ny != null && ny.GetBlock(cx, 15, cz).Solid,
-                        >= 16 => py != null && py.GetBlock(cx, 0, cz).Solid,
+                        < 0      => ny != null && ny.GetBlock(cx, Height - 1, cz).Solid,
+                        >= Height => py != null && py.GetBlock(cx, 0, cz).Solid,
 
                         _ => cz switch {
 
-                            < 0   => nz != null && nz.GetBlock(cx, cy, 15).Solid,
-                            >= 16 => pz != null && pz.GetBlock(cx, cy, 0).Solid,
+                            < 0      => nz != null && nz.GetBlock(cx, cy, Depth - 1).Solid,
+                            >= Depth => pz != null && pz.GetBlock(cx, cy, 0).Solid,
 
                             _ => false
                         }

@@ -8,9 +8,11 @@ internal static class Program {
 
         SetTraceLogLevel(TraceLogLevel.Warning);
 
+        SetConfigFlags(ConfigFlags.VSyncHint | ConfigFlags.Msaa4xHint);
+        
         InitWindow(1600, 900, "Xyloia");
 
-        SetTargetFPS(GetMonitorRefreshRate(GetCurrentMonitor()));
+        SetWindowMonitor(0);
 
         Registry.Initialize("Assets/Textures/Grass.png", "Assets/Textures/Dirt.png", "Assets/Textures/Sand.png", "Assets/Textures/Glow.png");
         Registry.SetLuminance(Registry.GetId("glow"), 15);
