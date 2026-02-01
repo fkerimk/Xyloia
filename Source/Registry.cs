@@ -22,45 +22,60 @@ internal static class Registry {
         if (texturePaths.Length == 0) return;
 
         var images = new List<Image>();
+
         var totalWidth = 0;
         var maxHeight = 0;
+
+        const int spacing = 2;
 
         foreach (var path in texturePaths) {
 
             var img = LoadImage(path);
+
             images.Add(img);
-            totalWidth += img.Width;
+            totalWidth += img.Width + spacing;
+
             if (img.Height > maxHeight) maxHeight = img.Height;
         }
 
-        var atlasImg = GenImageColor(totalWidth, maxHeight, Color.Blank);
-        var currentX = 0;
+        var atlasImg = GenImageColor(totalWidth, maxHeight, new Color(0, 0, 0, 255));
+        var currentX = 1; // Start with offset for left dilation
 
         byte nextId = 1;
 
-        for (var i = 0; i < texturePaths.Length; i++) {
+        for (var i = 0; i < images.Count; i++) {
 
             var img = images[i];
             var name = Path.GetFileNameWithoutExtension(texturePaths[i]).ToLower();
 
+            // Border dilation
+            ImageDraw(ref atlasImg, img, new Rectangle(0, 0, img.Width, img.Height), new Rectangle(currentX - 1, 0, img.Width, img.Height), Color.White);
+            ImageDraw(ref atlasImg, img, new Rectangle(0, 0, img.Width, img.Height), new Rectangle(currentX + 1, 0, img.Width, img.Height), Color.White);
+            ImageDraw(ref atlasImg, img, new Rectangle(0, 0, img.Width, img.Height), new Rectangle(currentX, -1, img.Width, img.Height), Color.White);
+            ImageDraw(ref atlasImg, img, new Rectangle(0, 0, img.Width, img.Height), new Rectangle(currentX, 1, img.Width, img.Height), Color.White);
+
+            // Draw actual image
             ImageDraw(ref atlasImg, img, new Rectangle(0, 0, img.Width, img.Height), new Rectangle(currentX, 0, img.Width, img.Height), Color.White);
 
             var id = nextId++;
-
             BlockIds[name] = id;
-            Uvv[id] = new UvInfo { X = (float)currentX / totalWidth, Y = 0, Width = (float)img.Width / totalWidth, Height = (float)img.Height / maxHeight };
-            Translucent[id] = false; // Default to solid/opaque
 
-            currentX += img.Width;
+            Uvv[id] = new UvInfo { X = (float)currentX / totalWidth, Y = 0, Width = (float)img.Width / totalWidth, Height = (float)img.Height / maxHeight };
+
+            Translucent[id] = false;
+
+            currentX += img.Width + spacing;
             UnloadImage(img);
         }
 
         Uvv[0] = new UvInfo { X = 0, Y = 0, Width = 0, Height = 0 };
-        Translucent[0] = true; // Air is translucent
+        Translucent[0] = true;
 
         AtlasTexture = LoadTextureFromImage(atlasImg);
 
+        GenTextureMipmaps(ref AtlasTexture);
         SetTextureFilter(AtlasTexture, TextureFilter.Point);
+        SetTextureWrap(AtlasTexture, TextureWrap.Clamp);
         UnloadImage(atlasImg);
     }
 
@@ -70,7 +85,6 @@ internal static class Registry {
 
     public static Color GetLuminance(byte id) => Luminance[id];
     public static void SetLuminance(byte id, Color value) => Luminance[id] = value;
-    
+
     public static bool IsTranslucent(byte id) => Translucent[id];
-    public static void SetTranslucent(byte id, bool value) => Translucent[id] = value;
 }
