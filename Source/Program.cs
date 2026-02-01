@@ -45,6 +45,8 @@ internal static class Program {
         var pitch = (float)Math.Asin(initialDir.Y);
         var yaw = (float)Math.Atan2(initialDir.Z, initialDir.X);
 
+        var freeCamVelocity = Vector3.Zero;
+
         DisableCursor();
 
         while (!WindowShouldClose()) {
@@ -89,22 +91,37 @@ internal static class Program {
                 pitch = Math.Clamp(pitch, -1.5f, 1.5f);
 
                 var dir = new Vector3((float)(Math.Cos(yaw) * Math.Cos(pitch)), (float)Math.Sin(pitch), (float)(Math.Sin(yaw) * Math.Cos(pitch)));
-                var fwd = Vector3.Normalize(dir with { Y = 0 });
-                var rgt = Vector3.Normalize(Vector3.Cross(fwd, Vector3.UnitY));
+                var rgt = Vector3.Normalize(Vector3.Cross(dir, Vector3.UnitY));
+                var up = Vector3.Normalize(Vector3.Cross(rgt, dir));
 
-                var speed = IsKeyDown(KeyboardKey.LeftShift) ? 120f : 40f;
-                if (IsKeyDown(KeyboardKey.W)) cam.Position += fwd * speed * dt;
-                if (IsKeyDown(KeyboardKey.S)) cam.Position -= fwd * speed * dt;
-                if (IsKeyDown(KeyboardKey.A)) cam.Position -= rgt * speed * dt;
-                if (IsKeyDown(KeyboardKey.D)) cam.Position += rgt * speed * dt;
+                var speed = IsKeyDown(KeyboardKey.LeftControl) ? 200f : IsKeyDown(KeyboardKey.LeftShift) ? 60f : 30f;
+                
+                const float accel = 10.0f;
+                const float friction = 6.0f;
 
-                if (IsKeyDown(KeyboardKey.E)) cam.Position += Vector3.UnitY * speed * dt;
-                if (IsKeyDown(KeyboardKey.Q)) cam.Position -= Vector3.UnitY * speed * dt;
+                var input = Vector3.Zero;
+                if (IsKeyDown(KeyboardKey.W)) input += dir;
+                if (IsKeyDown(KeyboardKey.S)) input -= dir;
+                if (IsKeyDown(KeyboardKey.A)) input -= rgt;
+                if (IsKeyDown(KeyboardKey.D)) input += rgt;
+                if (IsKeyDown(KeyboardKey.E)) input += up;
+                if (IsKeyDown(KeyboardKey.Q)) input -= up;
 
+                if (input.LengthSquared() > 0) input = Vector3.Normalize(input);
+
+                freeCamVelocity = Vector3.Lerp(freeCamVelocity, input * speed, Math.Clamp(accel * dt, 0, 1));
+                
+                if (input.LengthSquared() < 0.01f) {
+                    
+                    freeCamVelocity = Vector3.Lerp(freeCamVelocity, Vector3.Zero, Math.Clamp(friction * dt, 0, 1));
+                }
+
+                cam.Position += freeCamVelocity * dt;
                 cam.Target = cam.Position + dir;
 
             } else {
-
+                
+                freeCamVelocity = Vector3.Zero; // Reset when not in use
                 cam.Position = controller.CameraPosition;
                 cam.Target = controller.GetCameraTarget();
             }

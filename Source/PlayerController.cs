@@ -11,11 +11,13 @@ internal class PlayerController(World world, Vector3 position) {
     private const float Height = 1.8f; 
     private const float EyeHeight = 1.62f;
 
-    private const float MoveSpeed = 6.0f;
-    private const float JumpForce = 8.5f;
+    private const float MoveSpeed = 7.5f;
+    private const float JumpForce = 10.5f; 
     private const float Gravity = 24.0f;
-    private const float Friction = 10.0f;
-    private const float AirControl = 2.0f;
+    private const float FallGravityMultiplier = 1.6f; 
+    private const float Friction = 25.0f;
+    private const float Acceleration = 80.0f;
+    private const float AirControl = 5.0f;
 
     private const float CoyoteDuration = 0.15f;
     private const float JumpBufferDuration = 0.1f;
@@ -28,6 +30,7 @@ internal class PlayerController(World world, Vector3 position) {
     private float _yaw;
     private float _pitch;
     private bool _isGrounded;
+    private bool _isJumping;
 
     public void SetRotation(float yaw, float pitch) {
         
@@ -73,25 +76,37 @@ internal class PlayerController(World world, Vector3 position) {
 
     private void ApplyPhysics(Vector3 inputDir, float dt) {
 
-        // Gravity
-        Velocity.Y -= Gravity * dt;
+        // Dynamic gravity
+        var currentGravity = Gravity;
 
-        // Movement Logic
+        if (!_isGrounded) {
+            
+            if (Velocity.Y < 0) {
+
+                currentGravity *= FallGravityMultiplier;
+            }
+        }
+
+        Velocity.Y -= currentGravity * dt;
+
+        // Horizontal movement
         var targetVel = inputDir * MoveSpeed;
-        
-        // Horizontal Velocity
         var currentH = new Vector2(Velocity.X, Velocity.Z);
         var targetH = new Vector2(targetVel.X, targetVel.Z);
 
-        var acceleration = _isGrounded ? Friction * 6.0f : AirControl; 
-
-        // If no input on ground, stop quickly (Snappy)
-        if (_isGrounded && inputDir.LengthSquared() < 0.01f) {
-            acceleration = Friction * 10.0f; 
+        float accelRate;
+        
+        if (_isGrounded) {
+            
+            // High responsiveness
+            accelRate = inputDir.LengthSquared() > 0.01f ? Acceleration : Friction;
+        } else {
+            
+            accelRate = AirControl;
         }
 
-        // Moves current velocity towards target velocity
-        currentH = Vector2.Lerp(currentH, targetH, Math.Clamp(acceleration * dt, 0, 1));
+        // Snap to target more decisively
+        currentH = Vector2.Lerp(currentH, targetH, Math.Clamp(accelRate * dt, 0, 1));
 
         Velocity.X = currentH.X;
         Velocity.Z = currentH.Y;
@@ -103,7 +118,17 @@ internal class PlayerController(World world, Vector3 position) {
             _jumpBufferTimer = 0;
             _coyoteTimer = 0;
             _isGrounded = false;
+            _isJumping = true;
         }
+
+        // Variable jump height
+        if (_isJumping && Velocity.Y > 0 && !Raylib.IsKeyDown(KeyboardKey.Space)) {
+            
+            Velocity.Y *= 0.5f; 
+            _isJumping = false; 
+        }
+
+        if (_isGrounded) _isJumping = false;
 
         // Collision & Integration
         MoveAndSlide(dt);
