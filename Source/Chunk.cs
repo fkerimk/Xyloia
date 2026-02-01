@@ -15,7 +15,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
     public readonly List<Mesh> Meshes = [];
     private Block[]? _blocks = System.Buffers.ArrayPool<Block>.Shared.Rent(Volume);
-    private byte[]? _light = System.Buffers.ArrayPool<byte>.Shared.Rent(Volume);
+    private ushort[]? _light = System.Buffers.ArrayPool<ushort>.Shared.Rent(Volume);
 
     private readonly Lock _lock = new();
 
@@ -61,14 +61,14 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         IsDirty = true;
     }
 
-    public byte GetLight(int x, int y, int z) {
+    public ushort GetLight(int x, int y, int z) {
 
         if (_light == null || x < 0 || x >= Width || y < 0 || y >= Height || z < 0 || z >= Depth) return 0;
 
         return _light[(x * Depth + z) * Height + y];
     }
 
-    public void SetLight(int x, int y, int z, byte val) {
+    public void SetLight(int x, int y, int z, ushort val) {
 
         if (_light == null || x < 0 || x >= Width || y < 0 || y >= Height || z < 0 || z >= Depth) return;
 
@@ -175,7 +175,8 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
             continue;
 
-            byte GetFaceLight(int cx, int cy, int cz) {
+            ushort GetFaceLight(int cx, int cy, int cz) {
+
                 return cx switch {
 
                     >= 0 and < Width when cy is >= 0 and < Height && cz is >= 0 and < Depth => _light![(cx * Depth + cz) * Height + cy],
@@ -269,7 +270,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         b.VIdx = 0;
     }
 
-    private static void AddFace(MeshBuilder mesh, float ox, float oy, float oz, float x1, float y1, float z1, float x2, float y2, float z2, float x3, float y3, float z3, float x4, float y4, float z4, float nx, float ny, float nz, UvInfo info, byte light) {
+    private static void AddFace(MeshBuilder mesh, float ox, float oy, float oz, float x1, float y1, float z1, float x2, float y2, float z2, float x3, float y3, float z3, float x4, float y4, float z4, float nx, float ny, float nz, UvInfo info, ushort light) {
 
         mesh.Verts.Add(ox + x1);
         mesh.Verts.Add(oy + y1);
@@ -284,26 +285,23 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         mesh.Verts.Add(oy + y4);
         mesh.Verts.Add(oz + z4);
 
-        // Extract lighting
-        var sl = (light >> 4) & 0xF;
-        var bl = light & 0xF;
+        // Light layout: (Bits 0-3: R), (Bits 4-7: G), (Bits 8-11: B), (Bits 12-15: Sky)
+        var rl = light & 0xF;
+        var gl = (light >> 4) & 0xF;
+        var bl = (light >> 8) & 0xF;
+        var sl = (light >> 12) & 0xF;
 
-        // Curve light for better visual
+        var rlf = (float)Math.Pow(0.85, 15 - rl);
+        var glf = (float)Math.Pow(0.85, 15 - gl);
+        var blf = (float)Math.Pow(0.85, 15 - bl);
         var slf = (float)Math.Pow(0.8, 15 - sl);
-        var blf = (float)Math.Pow(0.8, 15 - bl);
 
-        var combined = Math.Max(slf, blf);
-        var val = (byte)(combined * 255);
+        // Combine skylight with colored lights
+        var r = Math.Max(rlf, slf);
+        var g = Math.Max(glf, slf);
+        var b = Math.Max(blf, slf);
 
-        var r = slf;
-        var g = slf;
-        var b = slf;
-
-        r = Math.Max(r, blf * 1.0f); // Yellowish
-        g = Math.Max(g, blf * 0.9f);
-        b = Math.Max(b, blf * 0.6f); // Less blue for warm light
-
-        // Ensure standard ambient
+        // Ambient floor
         r = Math.Max(r, 0.05f);
         g = Math.Max(g, 0.05f);
         b = Math.Max(b, 0.05f);
@@ -467,7 +465,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         if (_blocks == null) return;
 
         System.Buffers.ArrayPool<Block>.Shared.Return(_blocks);
-        System.Buffers.ArrayPool<byte>.Shared.Return(_light!);
+        System.Buffers.ArrayPool<ushort>.Shared.Return(_light!);
 
         _blocks = null;
         _light = null;

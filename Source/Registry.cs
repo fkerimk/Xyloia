@@ -13,7 +13,7 @@ internal static class Registry {
 
     private static readonly Dictionary<string, byte> BlockIds = [];
     private static readonly UvInfo[] Uvv = new UvInfo[256];
-    private static readonly byte[] Luminance = new byte[256];
+    private static readonly Color[] Luminance = new Color[256];
     private static readonly bool[] Translucent = new bool[256];
     public static Texture2D AtlasTexture;
 
@@ -68,8 +68,8 @@ internal static class Registry {
 
     public static byte GetId(string name) => BlockIds.GetValueOrDefault(name, (byte)0);
 
-    public static byte GetLuminance(byte id) => Luminance[id];
-    public static void SetLuminance(byte id, byte value) => Luminance[id] = value;
+    public static Color GetLuminance(byte id) => Luminance[id];
+    public static void SetLuminance(byte id, Color value) => Luminance[id] = value;
     
     public static bool IsTranslucent(byte id) => Translucent[id];
     public static void SetTranslucent(byte id, bool value) => Translucent[id] = value;

@@ -5,9 +5,9 @@ using static Raylib_cs.Raylib;
 
 internal class InteractionSystem(World world) {
 
-    private byte _selectedBlockId = 1;
-    private readonly byte[] _availableBlocks = [1, 2, 3, 4]; // Grass, Dirt, Sand, Glow
     private int _selectionIndex;
+    private byte _selectedBlockId = 1;
+    private byte[] _availableBlocks = [];
 
     private World.RaycastResult _currentHit;
 
@@ -18,6 +18,17 @@ internal class InteractionSystem(World world) {
     private bool _initialized;
 
     public void Initialize() {
+
+        var list = new List<byte>();
+
+        for (byte i = 1; i < 255; i++) {
+
+            if (Registry.GetUv(i).Width > 0) list.Add(i);
+        }
+
+        _availableBlocks = list.ToArray();
+
+        if (_availableBlocks.Length > 0) _selectedBlockId = _availableBlocks[0];
 
         _uiTexture = LoadRenderTexture(128, 128);
 

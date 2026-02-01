@@ -9,13 +9,18 @@ internal static class Program {
         SetTraceLogLevel(TraceLogLevel.Warning);
 
         SetConfigFlags(ConfigFlags.VSyncHint | ConfigFlags.Msaa4xHint);
-        
+
         InitWindow(1600, 900, "Xyloia");
 
         SetWindowMonitor(0);
 
-        Registry.Initialize("Assets/Textures/Grass.png", "Assets/Textures/Dirt.png", "Assets/Textures/Sand.png", "Assets/Textures/Glow.png");
-        Registry.SetLuminance(Registry.GetId("glow"), 15);
+        Registry.Initialize("Assets/Textures/Grass.png", "Assets/Textures/Dirt.png", "Assets/Textures/Sand.png", "Assets/Textures/Glow_Red.png", "Assets/Textures/Glow_Green.png", "Assets/Textures/Glow_Blue.png", "Assets/Textures/Glow_Yellow.png", "Assets/Textures/Glow_Magenta.png");
+
+        Registry.SetLuminance(Registry.GetId("glow_red"), new Color(255, 0, 0, 255));
+        Registry.SetLuminance(Registry.GetId("glow_green"), new Color(0, 255, 0, 255));
+        Registry.SetLuminance(Registry.GetId("glow_blue"), new Color(0, 0, 255, 255));
+        Registry.SetLuminance(Registry.GetId("glow_yellow"), new Color(255, 255, 0, 255));
+        Registry.SetLuminance(Registry.GetId("glow_magenta"), new Color(255, 0, 255, 255));
 
         var material = LoadMaterialDefault();
         SetMaterialTexture(ref material, MaterialMapIndex.Albedo, Registry.AtlasTexture);
@@ -33,7 +38,7 @@ internal static class Program {
         var controller = new PlayerController(world, cam.Position);
         var interaction = new InteractionSystem(world);
         interaction.Initialize();
-        
+
         var freeCamMode = false;
 
         var initialDir = Vector3.Normalize(cam.Target - cam.Position);
@@ -41,13 +46,13 @@ internal static class Program {
         var yaw = (float)Math.Atan2(initialDir.Z, initialDir.X);
 
         DisableCursor();
-        
+
         while (!WindowShouldClose()) {
 
             var dt = GetFrameTime();
-            
+
             if (!freeCamMode) {
-                
+
                 controller.FrameUpdate(dt);
             }
 
@@ -86,7 +91,7 @@ internal static class Program {
                 var dir = new Vector3((float)(Math.Cos(yaw) * Math.Cos(pitch)), (float)Math.Sin(pitch), (float)(Math.Sin(yaw) * Math.Cos(pitch)));
                 var fwd = Vector3.Normalize(dir with { Y = 0 });
                 var rgt = Vector3.Normalize(Vector3.Cross(fwd, Vector3.UnitY));
-                
+
                 var speed = IsKeyDown(KeyboardKey.LeftShift) ? 120f : 40f;
                 if (IsKeyDown(KeyboardKey.W)) cam.Position += fwd * speed * dt;
                 if (IsKeyDown(KeyboardKey.S)) cam.Position -= fwd * speed * dt;
@@ -103,7 +108,7 @@ internal static class Program {
                 cam.Position = controller.CameraPosition;
                 cam.Target = controller.GetCameraTarget();
             }
-            
+
             var camDir = Vector3.Normalize(cam.Target - cam.Position);
             interaction.Update(cam.Position, camDir);
 
