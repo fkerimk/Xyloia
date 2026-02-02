@@ -4,16 +4,18 @@ internal class BlockInfo {
 
     public byte Id;
     public string Name = "";
-    public bool Solid;
-    public bool Opaque;
-    public Color Luminance;
-    public ModelJson? Model;
 
+    public ModelJson? Model;
+    public Color Luminance = Color.Blank;
+    public bool Solid = true;
+    public bool Opaque = true;
     public FacingMode Facing = FacingMode.Fixed;
-    public int DefaultYaw = 0;
-    public string? ConnectRaw;
+    public int Yaw = 0;
+    public string? Connect;
+
     public readonly HashSet<byte> ConnectIds = [];
-    public bool IsFull = false;
+    public bool Full = false;
+    public bool Simple = false;
 }
 
 internal enum FacingMode {

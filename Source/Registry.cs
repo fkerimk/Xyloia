@@ -130,8 +130,8 @@ internal static class Registry {
                     Luminance = lum,
                     Model = model,
                     Facing = Enum.TryParse<FacingMode>(blockDef.Facing, true, out var facing) ? facing : FacingMode.Fixed,
-                    DefaultYaw = blockDef.Yaw,
-                    ConnectRaw = blockDef.Connect
+                    Yaw = blockDef.Yaw,
+                    Connect = blockDef.Connect
                 };
 
                 loadedBlocks.Add(info);
@@ -155,9 +155,9 @@ internal static class Registry {
         // Resolve Connection IDs
         foreach (var b in loadedBlocks) {
 
-            if (string.IsNullOrEmpty(b.ConnectRaw)) continue;
+            if (string.IsNullOrEmpty(b.Connect)) continue;
 
-            var parts = b.ConnectRaw.Split(',');
+            var parts = b.Connect.Split(',');
 
             foreach (var part in parts) {
 
@@ -185,13 +185,16 @@ internal static class Registry {
             BlockFaceUvs[b.Id][5] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("down"));
 
             // Determine if block is "Full" (fills the cube)
-            foreach (var element in b.Model.Elements) {
-                if (element.From[0] <= 0.05f && element.To[0] >= 15.95f &&
-                    element.From[1] <= 0.05f && element.To[1] >= 15.95f &&
-                    element.From[2] <= 0.05f && element.To[2] >= 15.95f) {
-                    b.IsFull = true;
-                    break;
-                }
+            foreach (var _ in b.Model.Elements.Where(element => element.From[0] <= 0.05f && element.To[0] >= 15.95f && element.From[1] <= 0.05f && element.To[1] >= 15.95f && element.From[2] <= 0.05f && element.To[2] >= 15.95f)) {
+
+                b.Full = true;
+
+                break;
+            }
+
+            if (b.Model is { Elements.Count: 1 }) {
+
+                b.Simple = true;
             }
         }
     }
@@ -340,10 +343,11 @@ internal static class Registry {
     public static Color GetLuminance(byte id) => Blocks[id].Luminance;
     public static bool IsSolid(byte id) => Blocks[id].Solid;
     public static bool IsOpaque(byte id) => Blocks[id].Opaque;
-    public static bool IsFullBlock(byte id) => Blocks[id].IsFull;
+    public static bool IsFullBlock(byte id) => Blocks[id].Full;
+    public static bool IsSimple(byte id) => Blocks[id].Simple;
     public static ModelJson? GetModel(byte id) => Blocks[id].Model;
     public static FacingMode GetFacing(byte id) => Blocks[id].Facing;
-    public static int GetYawStep(byte id) => Blocks[id].DefaultYaw;
+    public static int GetYawStep(byte id) => Blocks[id].Yaw;
 
     public static bool CanConnect(byte id, byte neighborId) {
 

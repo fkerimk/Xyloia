@@ -165,11 +165,74 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
             if (block.Id == 0) continue;
 
+            if (Registry.IsSimple(block.Id) && block.Data == 0) {
+
+                var faceLights = new ushort[4];
+
+                // North (Z-1) | Face 0
+                if (!IsOpaque(x, y, z - 1)) {
+                    
+                    var uv = Registry.GetFaceUv(block.Id, 0);
+                    FillLights(x, y, z - 1, -1, 0, 0, 0, 1, 0, faceLights);
+                    Swap(faceLights);
+                    AddFace(builder, x, y, z, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, uv, faceLights);
+                }
+
+                // South (Z+1) | Face 2
+                if (!IsOpaque(x, y, z + 1)) {
+                    
+                    var uv = Registry.GetFaceUv(block.Id, 2);
+                    FillLights(x, y, z + 1, 1, 0, 0, 0, 1, 0, faceLights);
+                    Swap(faceLights);
+                    AddFace(builder, x, y, z, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, uv, faceLights);
+                }
+
+                // East (X+1) | Face 1
+                if (!IsOpaque(x + 1, y, z)) {
+                    
+                    var uv = Registry.GetFaceUv(block.Id, 1);
+                    FillLights(x + 1, y, z, 0, 0, -1, 0, 1, 0, faceLights);
+                    Swap(faceLights);
+                    AddFace(builder, x, y, z, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, uv, faceLights);
+                }
+
+                // West (X-1) | Face 3
+                if (!IsOpaque(x - 1, y, z)) {
+                    
+                    var uv = Registry.GetFaceUv(block.Id, 3);
+                    FillLights(x - 1, y, z, 0, 0, 1, 0, 1, 0, faceLights);
+                    Swap(faceLights);
+                    AddFace(builder, x, y, z, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, -1, 0, 0, uv, faceLights);
+                }
+
+                // Up (Y+1) | Face 4
+                if (!IsOpaque(x, y + 1, z)) {
+                    
+                    var uv = Registry.GetFaceUv(block.Id);
+                    FillLights(x, y + 1, z, 1, 0, 0, 0, 0, -1, faceLights);
+                    Swap(faceLights);
+
+                    // x0=0,y1=1,z0=0 ...
+                    AddFace(builder, x, y, z, 0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 0, uv, faceLights);
+                }
+
+                // Down (Y-1) | Face 5
+                if (!IsOpaque(x, y - 1, z)) {
+                    
+                    var uv = Registry.GetFaceUv(block.Id, 5);
+                    FillLights(x, y - 1, z, 1, 0, 0, 0, 0, 1, faceLights);
+                    SwapPairs(faceLights);
+                    AddFace(builder, x, y, z, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, -1, 0, uv, faceLights);
+                }
+
+                continue;
+            }
+
             var model = Registry.GetModel(block.Id);
 
             if (model == null) continue;
 
-            var faceLights = new ushort[4];
+            var faceLights2 = new ushort[4];
 
             var facing = Registry.GetFacing(block.Id);
             var data = block.Data;
@@ -301,9 +364,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                         if (!ShouldCull(uv.CullMask)) {
 
-                            FillLights(x, y, z1 >= 0.999f ? z + 1 : z, 1, 0, 0, 0, 1, 0, faceLights);
-                            Swap(faceLights);
-                            AddFace(builder, x, y, z, x0, y1, z1, x1, y1, z1, x1, y0, z1, x0, y0, z1, 0, 0, 1, uv, faceLights);
+                            FillLights(x, y, z1 >= 0.999f ? z + 1 : z, 1, 0, 0, 0, 1, 0, faceLights2);
+                            Swap(faceLights2);
+                            AddFace(builder, x, y, z, x0, y1, z1, x1, y1, z1, x1, y0, z1, x0, y0, z1, 0, 0, 1, uv, faceLights2);
                         }
                     }
 
@@ -314,9 +377,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                         if (!ShouldCull(uv.CullMask)) {
 
-                            FillLights(x, y, z0 <= 0.001f ? z - 1 : z, -1, 0, 0, 0, 1, 0, faceLights);
-                            Swap(faceLights);
-                            AddFace(builder, x, y, z, x1, y1, z0, x0, y1, z0, x0, y0, z0, x1, y0, z0, 0, 0, -1, uv, faceLights);
+                            FillLights(x, y, z0 <= 0.001f ? z - 1 : z, -1, 0, 0, 0, 1, 0, faceLights2);
+                            Swap(faceLights2);
+                            AddFace(builder, x, y, z, x1, y1, z0, x0, y1, z0, x0, y0, z0, x1, y0, z0, 0, 0, -1, uv, faceLights2);
                         }
                     }
 
@@ -327,9 +390,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                         if (!ShouldCull(uv.CullMask)) {
 
-                            FillLights(x, y1 >= 0.999f ? y + 1 : y, z, 1, 0, 0, 0, 0, -1, faceLights);
-                            Swap(faceLights);
-                            AddFace(builder, x, y, z, x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, 0, 1, 0, uv, faceLights);
+                            FillLights(x, y1 >= 0.999f ? y + 1 : y, z, 1, 0, 0, 0, 0, -1, faceLights2);
+                            Swap(faceLights2);
+                            AddFace(builder, x, y, z, x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, 0, 1, 0, uv, faceLights2);
                         }
                     }
 
@@ -340,9 +403,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                         if (!ShouldCull(uv.CullMask)) {
 
-                            FillLights(x, y0 <= 0.001f ? y - 1 : y, z, 1, 0, 0, 0, 0, 1, faceLights);
-                            SwapPairs(faceLights);
-                            AddFace(builder, x, y, z, x1, y0, z0, x0, y0, z0, x0, y0, z1, x1, y0, z1, 0, -1, 0, uv, faceLights);
+                            FillLights(x, y0 <= 0.001f ? y - 1 : y, z, 1, 0, 0, 0, 0, 1, faceLights2);
+                            SwapPairs(faceLights2);
+                            AddFace(builder, x, y, z, x1, y0, z0, x0, y0, z0, x0, y0, z1, x1, y0, z1, 0, -1, 0, uv, faceLights2);
                         }
                     }
 
@@ -353,9 +416,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                         if (!ShouldCull(uv.CullMask)) {
 
-                            FillLights(x1 >= 0.999f ? x + 1 : x, y, z, 0, 0, -1, 0, 1, 0, faceLights);
-                            Swap(faceLights);
-                            AddFace(builder, x, y, z, x1, y1, z1, x1, y1, z0, x1, y0, z0, x1, y0, z1, 1, 0, 0, uv, faceLights);
+                            FillLights(x1 >= 0.999f ? x + 1 : x, y, z, 0, 0, -1, 0, 1, 0, faceLights2);
+                            Swap(faceLights2);
+                            AddFace(builder, x, y, z, x1, y1, z1, x1, y1, z0, x1, y0, z0, x1, y0, z1, 1, 0, 0, uv, faceLights2);
                         }
                     }
 
@@ -366,9 +429,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                         if (!ShouldCull(uv.CullMask)) {
 
-                            FillLights(x0 <= 0.001f ? x - 1 : x, y, z, 0, 0, 1, 0, 1, 0, faceLights);
-                            Swap(faceLights);
-                            AddFace(builder, x, y, z, x0, y1, z0, x0, y1, z1, x0, y0, z1, x0, y0, z0, -1, 0, 0, uv, faceLights);
+                            FillLights(x0 <= 0.001f ? x - 1 : x, y, z, 0, 0, 1, 0, 1, 0, faceLights2);
+                            Swap(faceLights2);
+                            AddFace(builder, x, y, z, x0, y1, z0, x0, y1, z1, x0, y0, z1, x0, y0, z0, -1, 0, 0, uv, faceLights2);
                         }
                     }
                 } else {
@@ -452,13 +515,13 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                         var vR = Vector3.Normalize(p2 - p1);
                         var vU = Vector3.Normalize(p1 - p4);
 
-                        FillLights(x, y, z, (int)Math.Round(vR.X), (int)Math.Round(vR.Y), (int)Math.Round(vR.Z), (int)Math.Round(vU.X), (int)Math.Round(vU.Y), (int)Math.Round(vU.Z), faceLights);
+                        FillLights(x, y, z, (int)Math.Round(vR.X), (int)Math.Round(vR.Y), (int)Math.Round(vR.Z), (int)Math.Round(vU.X), (int)Math.Round(vU.Y), (int)Math.Round(vU.Z), faceLights2);
 
                         // Fix light-vertex mapping (BL->TL, etc.)
-                        Swap(faceLights);
+                        Swap(faceLights2);
 
                         // Use AddFace to handle UV rotation and Indexing correctly
-                        AddFace(builder, x, y, z, p1.X, p1.Y, p1.Z, p2.X, p2.Y, p2.Z, p3.X, p3.Y, p3.Z, p4.X, p4.Y, p4.Z, 0, 0, 0, faceUv, faceLights);
+                        AddFace(builder, x, y, z, p1.X, p1.Y, p1.Z, p2.X, p2.Y, p2.Z, p3.X, p3.Y, p3.Z, p4.X, p4.Y, p4.Z, 0, 0, 0, faceUv, faceLights2);
                     }
                 }
             }
