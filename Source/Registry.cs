@@ -183,6 +183,16 @@ internal static class Registry {
             BlockFaceUvs[b.Id][3] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("west"));
             BlockFaceUvs[b.Id][4] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("up"));
             BlockFaceUvs[b.Id][5] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("down"));
+
+            // Determine if block is "Full" (fills the cube)
+            foreach (var element in b.Model.Elements) {
+                if (element.From[0] <= 0.05f && element.To[0] >= 15.95f &&
+                    element.From[1] <= 0.05f && element.To[1] >= 15.95f &&
+                    element.From[2] <= 0.05f && element.To[2] >= 15.95f) {
+                    b.IsFull = true;
+                    break;
+                }
+            }
         }
     }
 
@@ -330,6 +340,7 @@ internal static class Registry {
     public static Color GetLuminance(byte id) => Blocks[id].Luminance;
     public static bool IsSolid(byte id) => Blocks[id].Solid;
     public static bool IsOpaque(byte id) => Blocks[id].Opaque;
+    public static bool IsFullBlock(byte id) => Blocks[id].IsFull;
     public static ModelJson? GetModel(byte id) => Blocks[id].Model;
     public static FacingMode GetFacing(byte id) => Blocks[id].Facing;
     public static int GetYawStep(byte id) => Blocks[id].DefaultYaw;

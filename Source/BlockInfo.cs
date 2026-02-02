@@ -13,6 +13,7 @@ internal class BlockInfo {
     public int DefaultYaw = 0;
     public string? ConnectRaw;
     public readonly HashSet<byte> ConnectIds = [];
+    public bool IsFull = false;
 }
 
 internal enum FacingMode {

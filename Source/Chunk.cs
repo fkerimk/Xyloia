@@ -239,7 +239,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 float x0 = el.From[0] / 16f, y0 = el.From[1] / 16f, z0 = el.From[2] / 16f;
                 float x1 = el.To[0] / 16f, y1 = el.To[1] / 16f, z1 = el.To[2] / 16f;
 
-                if (isRotated && isAxisAligned) {
+                if (isAxisAligned) {
 
                     var c = new Vector3(0.5f);
                     var pMin = new Vector3(x0, y0, z0) - c;
@@ -576,30 +576,25 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                 if (cx is >= 0 and < Width && cy is >= 0 and < Height && cz is >= 0 and < Depth) return _light![(cx * Depth + cz) * Height + cy];
 
-                switch (cy) {
+                return cy switch {
 
-                    case >= Height: return 0xF000;
-                    case < 0:       return 0;
-                }
+                    >= Height => 0xF000,
+                    < 0       => 0,
 
-                var clx = cx < 0 ? 0 : (cx >= Width ? Width - 1 : cx);
-                var clz = cz < 0 ? 0 : (cz >= Depth ? Depth - 1 : cz);
-                var fallback = _light![(clx * Depth + clz) * Height + cy];
+                    _ => cx switch {
 
-                return cx switch {
+                        < 0      => nx?.GetLight(cx + Width, cy, cz) ?? 0,
+                        >= Width => px?.GetLight(cx - Width, cy, cz) ?? 0,
 
-                    < 0 when cz is < 0 or >= Depth      => fallback,
-                    < 0                                 => nx?.GetLight(Width - 1, cy, cz) ?? fallback,
-                    >= Width when cz is < 0 or >= Depth => fallback,
-                    >= Width                            => px?.GetLight(0, cy, cz) ?? fallback,
+                        _ => cz switch {
 
-                    _ => cz switch {
-
-                        < 0      => nz?.GetLight(cx, cy, Depth - 1) ?? fallback,
-                        >= Depth => pz?.GetLight(cx, cy, 0) ?? fallback,
-                        _        => 0
+                            < 0      => nz?.GetLight(cx, cy, cz + Depth) ?? 0,
+                            >= Depth => pz?.GetLight(cx, cy, cz - Depth) ?? 0,
+                            _        => 0
+                        }
                     }
                 };
+
             }
 
             Block GetBlockSafe(int cx, int cy, int cz) {
@@ -609,8 +604,8 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 return cx switch {
 
                     >= 0 and < Width when cy is >= 0 and < Height && cz is >= 0 and < Depth => blocks[(cx * Depth + cz) * Height + cy],
-                    < 0                                                                     => nx?.GetBlock(Width - 1, cy, cz) ?? new Block(),
-                    >= Width                                                                => px?.GetBlock(0, cy, cz) ?? new Block(),
+                    < 0                                                                     => nx?.GetBlock(cx + Width, cy, cz) ?? new Block(),
+                    >= Width                                                                => px?.GetBlock(cx - Width, cy, cz) ?? new Block(),
 
                     _ => cy switch {
 
@@ -618,12 +613,14 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                         >= Height => py?.GetBlock(cx, 0, cz) ?? new Block(),
 
                         _ => cz switch {
-                            < 0      => nz?.GetBlock(cx, cy, Depth - 1) ?? new Block(),
+
+                            < 0      => nz?.GetBlock(cx, cy, cz + Depth) ?? new Block(),
                             >= Depth => pz?.GetBlock(cx, cy, 0) ?? new Block(),
                             _        => new Block()
                         }
                     }
                 };
+
             }
 
             bool IsOpaque(int cx, int cy, int cz) {
@@ -636,8 +633,18 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 // Connection-based culling
                 if (Registry.CanConnect(block.Id, b.Id)) return true;
 
-                // Smart culling: Transparent blocks act as opaque if fully enclosed by naturally opaque blocks
-                return Registry.IsOpaque(GetBlockSafe(cx + 1, cy, cz).Id) && Registry.IsOpaque(GetBlockSafe(cx - 1, cy, cz).Id) && Registry.IsOpaque(GetBlockSafe(cx, cy + 1, cz).Id) && Registry.IsOpaque(GetBlockSafe(cx, cy - 1, cz).Id) && Registry.IsOpaque(GetBlockSafe(cx, cy, cz + 1).Id) && Registry.IsOpaque(GetBlockSafe(cx, cy, cz - 1).Id);
+                // Smart culling for transparent blocks. 
+                // 1. Only allow if the neighbor contains a model element that covers the full volume.
+                if (!Registry.IsFullBlock(b.Id)) return false;
+
+                // 2. Clump-aware surrounded check.
+                bool IsOpaqueNb(int xOffset, int yOffset, int zOffset) {
+                    var nb = GetBlockSafe(cx + xOffset, cy + yOffset, cz + zOffset);
+
+                    return nb.Opaque || Registry.CanConnect(b.Id, nb.Id);
+                }
+
+                return IsOpaqueNb(1, 0, 0) && IsOpaqueNb(-1, 0, 0) && IsOpaqueNb(0, 1, 0) && IsOpaqueNb(0, -1, 0) && IsOpaqueNb(0, 0, 1) && IsOpaqueNb(0, 0, -1);
             }
 
             bool IsSolid(int cx, int cy, int cz) => GetBlockSafe(cx, cy, cz).Solid;
@@ -754,7 +761,6 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 mesh.Uvs.Add(v2); // BL
 
                 break;
-
         }
 
         for (var k = 0; k < 4; k++) {
