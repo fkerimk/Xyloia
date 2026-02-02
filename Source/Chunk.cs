@@ -39,6 +39,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         public List<byte> Colors = new(4096);
         public readonly List<ushort> Tris = new(2048);
 
+        public readonly Queue<(int x, int y, int z)> BfsQueue = new();
+        public readonly HashSet<(int x, int y, int z)> BfsVisited = [];
+
         public ushort VIdx;
 
         public void Clear() {
@@ -197,7 +200,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 if (block.Id == 0) continue;
 
                 // Optimization: If a block (Simple or Complex) is fully surrounded by Opaque blocks, don't draw it.
-                if (IsHidden(x, y, z, -1, 4, pBlocks)) continue;
+                if (IsHidden(x, y, z, pBlocks)) continue;
 
                 if (Registry.IsSimple(block.Id) && block.Data == 0) {
 
@@ -824,36 +827,52 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                 }
 
-                // Recursive check to see if a block is encased in opaque blocks
-                bool IsHidden(int cx, int cy, int cz, int ignoreFace, int depth, Block* pB) {
+                // BFS check to see if a block is encased in opaque blocks. Uses reused collections from MeshBuilder to avoid zero-alloc.
+                bool IsHidden(int startX, int startY, int startZ, Block* pB) {
 
-                    if (depth <= 0) return false; // If too deep, assume visible to avoid glitches.
+                    // Reset collections
+                    builder.BfsQueue.Clear();
+                    builder.BfsVisited.Clear();
 
-                    // Check neighbors. If all lead to Opaque blocks (or recursed hidden), then True. If ANY leads to Air (or visible boundary), then False..
-                    if (ignoreFace != 0 && !CheckDir(cx, cy, cz - 1, 2)) return false;
-                    if (ignoreFace != 2 && !CheckDir(cx, cy, cz + 1, 0)) return false;
-                    if (ignoreFace != 1 && !CheckDir(cx + 1, cy, cz, 3)) return false;
-                    if (ignoreFace != 3 && !CheckDir(cx - 1, cy, cz, 1)) return false;
-                    if (ignoreFace != 4 && !CheckDir(cx, cy + 1, cz, 5)) return false;
-                    if (ignoreFace != 5 && !CheckDir(cx, cy - 1, cz, 4)) return false;
+                    var start = (startX, startY, startZ);
+                    builder.BfsQueue.Enqueue(start);
+                    builder.BfsVisited.Add(start);
+
+                    var count = 0;
+                    const int SearchLimit = 64; // Limit to prevent freezing on large open areas
+
+                    while (builder.BfsQueue.Count > 0) {
+
+                        // Failing logic: If volume is too big, it's likely visible / open
+                        if (count++ > SearchLimit) return false;
+
+                        var (cx, cy, cz) = builder.BfsQueue.Dequeue();
+
+                        // Check all 6 neighbors
+                        if (!CheckNb(cx + 1, cy, cz, pB)) return false;
+                        if (!CheckNb(cx - 1, cy, cz, pB)) return false;
+                        if (!CheckNb(cx, cy, cz + 1, pB)) return false;
+                        if (!CheckNb(cx, cy, cz - 1, pB)) return false;
+                        if (!CheckNb(cx, cy + 1, cz, pB)) return false;
+                        if (!CheckNb(cx, cy - 1, cz, pB)) return false;
+                    }
 
                     return true;
 
-                    bool CheckDir(int nX, int nY, int nZ, int newIgnore) {
+                    bool CheckNb(int nX, int nY, int nZ, Block* blockPtr) {
 
-                        Block nb;
+                        if (builder.BfsVisited.Contains((nX, nY, nZ))) return true; // Already processed
 
-                        // Fast path for internal blocks
-                        if (nX is >= 0 and < 16 && nY is >= 0 and < 256 && nZ is >= 0 and < 16)
-                            nb = pB[(nX * Depth + nZ) * Height + nY];
-                        else
-                            nb = GetBlockSafe(nX, nY, nZ, pB);
+                        var nb = GetBlockSafe(nX, nY, nZ, blockPtr);
 
-                        if (nb.Opaque) return true;
-                        if (nb.Id == 0) return false; // Air -> Visible!
+                        if (nb.Opaque) return true;   // Wall -> Closed
+                        if (nb.Id == 0) return false; // Air/Leak -> Visible!
 
-                        // Transparent/Complex block. Recurse.
-                        return IsHidden(nX, nY, nZ, newIgnore, depth - 1, pB);
+                        // Transparent/Complex -> Add to search
+                        builder.BfsVisited.Add((nX, nY, nZ));
+                        builder.BfsQueue.Enqueue((nX, nY, nZ));
+
+                        return true;
                     }
                 }
 
@@ -864,7 +883,8 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                     if (b.Opaque) return true;
                     if (b.Id == 0) return false;
 
-                    if (IsHidden(cx, cy, cz, -1, 4, pB)) return true; // Depth 4 is usually enough for thick walls
+                    // Check if hidden (BFS).
+                    if (IsHidden(cx, cy, cz, pB)) return true;
 
                     // Connection-based culling
                     if (Registry.CanConnect(block.Id, b.Id)) return true;
@@ -885,32 +905,32 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                 bool IsSolid(int cx, int cy, int cz, Block* pB) => GetBlockSafe(cx, cy, cz, pB).Solid;
             }
-        }
 
-        Flush(builder, newVLists, newNLists, newTLists, newCLists, newILists);
+            Flush(builder, newVLists, newNLists, newTLists, newCLists, newILists);
 
-        if (newVLists.Count <= 0) return;
+            if (newVLists.Count <= 0) return;
 
-        lock (_lock) {
+            lock (_lock) {
 
-            if (_disposed) return;
+                if (_disposed) return;
 
-            if (_vLists != null) {
+                if (_vLists != null) {
 
-                foreach (var l in _vLists) ListPool<float>.Return(l);
-                foreach (var l in _nLists!) ListPool<float>.Return(l);
-                foreach (var l in _tLists!) ListPool<float>.Return(l);
-                foreach (var l in _cLists!) ListPool<byte>.Return(l);
+                    foreach (var l in _vLists) ListPool<float>.Return(l);
+                    foreach (var l in _nLists!) ListPool<float>.Return(l);
+                    foreach (var l in _tLists!) ListPool<float>.Return(l);
+                    foreach (var l in _cLists!) ListPool<byte>.Return(l);
+                }
+
+                _vLists = newVLists;
+                _nLists = newNLists;
+                _tLists = newTLists;
+                _cLists = newCLists;
+                _iLists = newILists;
             }
 
-            _vLists = newVLists;
-            _nLists = newNLists;
-            _tLists = newTLists;
-            _cLists = newCLists;
-            _iLists = newILists;
+            IsDirty = true;
         }
-
-        IsDirty = true;
     }
 
     private static void Flush(MeshBuilder b, List<List<float>> v, List<List<float>> n, List<List<float>> t, List<List<byte>> c, List<ushort[]> i) {
