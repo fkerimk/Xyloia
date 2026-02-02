@@ -60,7 +60,7 @@ internal static class Program {
             }
 
             // Dynamic Light Toggle
-            if (IsKeyPressed(KeyboardKey.L)) dynamicLight = !dynamicLight;
+            if (IsKeyPressed(KeyboardKey.F)) dynamicLight = !dynamicLight;
             
             world.UpdateDynamicLight(cam.Position, dynamicLight);
 
@@ -69,7 +69,7 @@ internal static class Program {
             world.Update(cam.Position);
 
             // Toggle camera
-            if (IsKeyPressed(KeyboardKey.F)) {
+            if (IsKeyPressed(KeyboardKey.N)) {
 
                 freeCamMode = !freeCamMode;
 
@@ -149,8 +149,9 @@ internal static class Program {
             interaction.DrawUi();
 
             DrawFPS(10, 10);
-            DrawText(freeCamMode ? "[F] Free Cam" : "[F] Character", 10, 40, 20, Color.Black);
-            DrawText($"Pos: {controller.Position:F2}", 10, 70, 20, Color.Black);
+            DrawText($"{controller.Position:F2}".TrimStart('<').TrimEnd('>'), 10, 30, 20, Color.Yellow);
+            DrawText("[N] Free Cam", 10, 50, 20, freeCamMode ? Color.Green : Color.Red);
+            DrawText("[F] Dynamic Light", 10, 70, 20, dynamicLight ? Color.Green : Color.Red);
 
             EndDrawing();
         }
