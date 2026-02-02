@@ -214,6 +214,25 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 }
             }
 
+            var worldDirs = new (int X, int Y, int Z)[6];
+
+            for (var i = 0; i < 6; i++) {
+
+                var vec = i switch {
+
+                    0 => -Vector3.UnitZ,
+                    1 => Vector3.UnitX,
+                    2 => Vector3.UnitZ,
+                    3 => -Vector3.UnitX,
+                    4 => Vector3.UnitY,
+                    5 => -Vector3.UnitY,
+                    _ => Vector3.Zero
+                };
+
+                if (isRotated) vec = Vector3.Transform(vec, rot);
+                worldDirs[i] = ((int)Math.Round(vec.X), (int)Math.Round(vec.Y), (int)Math.Round(vec.Z));
+            }
+
             foreach (var el in model.Elements) {
 
                 // Calculate element bounds
@@ -221,18 +240,18 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 float x1 = el.To[0] / 16f, y1 = el.To[1] / 16f, z1 = el.To[2] / 16f;
 
                 if (isRotated && isAxisAligned) {
-                    
+
                     var c = new Vector3(0.5f);
                     var pMin = new Vector3(x0, y0, z0) - c;
                     var pMax = new Vector3(x1, y1, z1) - c;
 
-                    var corners = new[] { pMin, new(pMax.X, pMin.Y, pMin.Z), new(pMin.X, pMax.Y, pMin.Z), new(pMin.X, pMin.Y, pMax.Z), new(pMax.X, pMax.Y, pMin.Z), new(pMax.X, pMin.Y, pMax.Z), new(pMin.X, pMax.Y, pMax.Z), pMax };
+                    var corners = new[] { pMin, new Vector3(pMax.X, pMin.Y, pMin.Z), new Vector3(pMin.X, pMax.Y, pMin.Z), new Vector3(pMin.X, pMin.Y, pMax.Z), new Vector3(pMax.X, pMax.Y, pMin.Z), new Vector3(pMax.X, pMin.Y, pMax.Z), new Vector3(pMin.X, pMax.Y, pMax.Z), pMax };
 
                     var min = new Vector3(float.MaxValue);
                     var max = new Vector3(float.MinValue);
 
                     for (var k = 0; k < 8; k++) {
-                        
+
                         var t = Vector3.Transform(corners[k], rot);
                         min = Vector3.Min(min, t);
                         max = Vector3.Max(max, t);
@@ -252,9 +271,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                     // Local function to resolve source face for axis-aligned rotation
                     string GetSourceFace(Vector3 dir) {
-                        
+
                         if (!isRotated) {
-                            
+
                             if (dir == Vector3.UnitZ) return "south";
                             if (dir == -Vector3.UnitZ) return "north";
                             if (dir == Vector3.UnitX) return "east";
@@ -276,72 +295,84 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                     }
 
                     if (el.Faces.TryGetValue(GetSourceFace(Vector3.UnitZ), out var fS)) {
-                        
+
                         // South
-                        if (!(z1 >= 0.999f) || !IsOpaque(x, y, z + 1)) {
-                            
+                        var uv = Registry.ResolveFaceUv(model, fS);
+
+                        if (!ShouldCull(uv.CullMask)) {
+
                             FillLights(x, y, z1 >= 0.999f ? z + 1 : z, 1, 0, 0, 0, 1, 0, faceLights);
                             Swap(faceLights);
-                            AddFace(builder, x, y, z, x0, y1, z1, x1, y1, z1, x1, y0, z1, x0, y0, z1, 0, 0, 1, Registry.ResolveFaceUv(model, fS), faceLights);
+                            AddFace(builder, x, y, z, x0, y1, z1, x1, y1, z1, x1, y0, z1, x0, y0, z1, 0, 0, 1, uv, faceLights);
                         }
                     }
 
                     if (el.Faces.TryGetValue(GetSourceFace(-Vector3.UnitZ), out var fN)) {
-                        
+
                         // North
-                        if (!(z0 <= 0.001f) || !IsOpaque(x, y, z - 1)) {
-                            
+                        var uv = Registry.ResolveFaceUv(model, fN);
+
+                        if (!ShouldCull(uv.CullMask)) {
+
                             FillLights(x, y, z0 <= 0.001f ? z - 1 : z, -1, 0, 0, 0, 1, 0, faceLights);
                             Swap(faceLights);
-                            AddFace(builder, x, y, z, x1, y1, z0, x0, y1, z0, x0, y0, z0, x1, y0, z0, 0, 0, -1, Registry.ResolveFaceUv(model, fN), faceLights);
+                            AddFace(builder, x, y, z, x1, y1, z0, x0, y1, z0, x0, y0, z0, x1, y0, z0, 0, 0, -1, uv, faceLights);
                         }
                     }
 
                     if (el.Faces.TryGetValue(GetSourceFace(Vector3.UnitY), out var fU)) {
-                        
+
                         // Up
-                        if (!(y1 >= 0.999f) || !IsOpaque(x, y + 1, z)) {
-                            
+                        var uv = Registry.ResolveFaceUv(model, fU);
+
+                        if (!ShouldCull(uv.CullMask)) {
+
                             FillLights(x, y1 >= 0.999f ? y + 1 : y, z, 1, 0, 0, 0, 0, -1, faceLights);
                             Swap(faceLights);
-                            AddFace(builder, x, y, z, x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, 0, 1, 0, Registry.ResolveFaceUv(model, fU), faceLights);
+                            AddFace(builder, x, y, z, x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, 0, 1, 0, uv, faceLights);
                         }
                     }
 
                     if (el.Faces.TryGetValue(GetSourceFace(-Vector3.UnitY), out var fD)) {
-                        
+
                         // Down
-                        if (!(y0 <= 0.001f) || !IsOpaque(x, y - 1, z)) {
-                            
+                        var uv = Registry.ResolveFaceUv(model, fD);
+
+                        if (!ShouldCull(uv.CullMask)) {
+
                             FillLights(x, y0 <= 0.001f ? y - 1 : y, z, 1, 0, 0, 0, 0, 1, faceLights);
                             SwapPairs(faceLights);
-                            AddFace(builder, x, y, z, x1, y0, z0, x0, y0, z0, x0, y0, z1, x1, y0, z1, 0, -1, 0, Registry.ResolveFaceUv(model, fD), faceLights);
+                            AddFace(builder, x, y, z, x1, y0, z0, x0, y0, z0, x0, y0, z1, x1, y0, z1, 0, -1, 0, uv, faceLights);
                         }
                     }
 
                     if (el.Faces.TryGetValue(GetSourceFace(Vector3.UnitX), out var fE)) {
-                        
+
                         // East
-                        if (!(x1 >= 0.999f) || !IsOpaque(x + 1, y, z)) {
-                            
+                        var uv = Registry.ResolveFaceUv(model, fE);
+
+                        if (!ShouldCull(uv.CullMask)) {
+
                             FillLights(x1 >= 0.999f ? x + 1 : x, y, z, 0, 0, -1, 0, 1, 0, faceLights);
                             Swap(faceLights);
-                            AddFace(builder, x, y, z, x1, y1, z1, x1, y1, z0, x1, y0, z0, x1, y0, z1, 1, 0, 0, Registry.ResolveFaceUv(model, fE), faceLights);
+                            AddFace(builder, x, y, z, x1, y1, z1, x1, y1, z0, x1, y0, z0, x1, y0, z1, 1, 0, 0, uv, faceLights);
                         }
                     }
 
                     if (el.Faces.TryGetValue(GetSourceFace(-Vector3.UnitX), out var fW)) {
-                        
+
                         // West
-                        
-                        if (!(x0 <= 0.001f) || !IsOpaque(x - 1, y, z)) {
+                        var uv = Registry.ResolveFaceUv(model, fW);
+
+                        if (!ShouldCull(uv.CullMask)) {
+
                             FillLights(x0 <= 0.001f ? x - 1 : x, y, z, 0, 0, 1, 0, 1, 0, faceLights);
                             Swap(faceLights);
-                            AddFace(builder, x, y, z, x0, y1, z0, x0, y1, z1, x0, y0, z1, x0, y0, z0, -1, 0, 0, Registry.ResolveFaceUv(model, fW), faceLights);
+                            AddFace(builder, x, y, z, x0, y1, z0, x0, y1, z1, x0, y0, z1, x0, y0, z0, -1, 0, 0, uv, faceLights);
                         }
                     }
                 } else {
-                    
+
                     // Off-axis rotation (Generic)
                     var c = new Vector3(0.5f);
                     var min = new Vector3(el.From[0], el.From[1], el.From[2]) / 16f;
@@ -350,53 +381,64 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                     var maxRot = max - c;
 
                     foreach (var kvp in el.Faces) {
-                        
+
+                        var f = kvp.Value;
+                        var faceUv = Registry.ResolveFaceUv(model, f);
+
+                        if (ShouldCull(faceUv.CullMask)) continue;
+
                         Vector3 p1, p2, p3, p4;
 
                         switch (kvp.Key) {
-                            
+
                             case "north": // Standard: TR, TL, BL, BR
                                 p1 = new Vector3(maxRot.X, maxRot.Y, minRot.Z);
                                 p2 = new Vector3(minRot.X, maxRot.Y, minRot.Z);
                                 p3 = new Vector3(minRot.X, minRot.Y, minRot.Z);
                                 p4 = new Vector3(maxRot.X, minRot.Y, minRot.Z);
+
                                 break;
-                            
+
                             case "south": // Standard: TL, TR, BR, BL
                                 p1 = new Vector3(minRot.X, maxRot.Y, maxRot.Z);
                                 p2 = new Vector3(maxRot.X, maxRot.Y, maxRot.Z);
                                 p3 = new Vector3(maxRot.X, minRot.Y, maxRot.Z);
                                 p4 = new Vector3(minRot.X, minRot.Y, maxRot.Z);
+
                                 break;
-                            
+
                             case "east": // Standard: TL, TR, BR, BL 
                                 p1 = new Vector3(maxRot.X, maxRot.Y, maxRot.Z);
                                 p2 = new Vector3(maxRot.X, maxRot.Y, minRot.Z);
                                 p3 = new Vector3(maxRot.X, minRot.Y, minRot.Z);
                                 p4 = new Vector3(maxRot.X, minRot.Y, maxRot.Z);
+
                                 break;
-                            
+
                             case "west": // Standard: TR, TL, BL, BR
                                 p1 = new Vector3(minRot.X, maxRot.Y, minRot.Z);
                                 p2 = new Vector3(minRot.X, maxRot.Y, maxRot.Z);
                                 p3 = new Vector3(minRot.X, minRot.Y, maxRot.Z);
                                 p4 = new Vector3(minRot.X, minRot.Y, minRot.Z);
+
                                 break;
-                            
+
                             case "up": // Standard: TL, TR, BR, BL
                                 p1 = new Vector3(minRot.X, maxRot.Y, minRot.Z);
                                 p2 = new Vector3(maxRot.X, maxRot.Y, minRot.Z);
                                 p3 = new Vector3(maxRot.X, maxRot.Y, maxRot.Z);
                                 p4 = new Vector3(minRot.X, maxRot.Y, maxRot.Z);
+
                                 break;
-                            
+
                             case "down": // Standard: TR, TL, BL, BR
                                 p1 = new Vector3(maxRot.X, minRot.Y, minRot.Z);
                                 p2 = new Vector3(minRot.X, minRot.Y, minRot.Z);
                                 p3 = new Vector3(minRot.X, minRot.Y, maxRot.Z);
                                 p4 = new Vector3(maxRot.X, minRot.Y, maxRot.Z);
+
                                 break;
-                            
+
                             default: continue;
                         }
 
@@ -416,12 +458,28 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                         Swap(faceLights);
 
                         // Use AddFace to handle UV rotation and Indexing correctly
-                        AddFace(builder, x, y, z, p1.X, p1.Y, p1.Z, p2.X, p2.Y, p2.Z, p3.X, p3.Y, p3.Z, p4.X, p4.Y, p4.Z, 0, 0, 0, Registry.ResolveFaceUv(model, kvp.Value), faceLights);
+                        AddFace(builder, x, y, z, p1.X, p1.Y, p1.Z, p2.X, p2.Y, p2.Z, p3.X, p3.Y, p3.Z, p4.X, p4.Y, p4.Z, 0, 0, 0, faceUv, faceLights);
                     }
                 }
             }
 
             continue;
+
+            bool ShouldCull(byte mask) {
+
+                if (mask == 0) return false;
+
+                for (var i = 0; i < 6; i++) {
+
+                    if ((mask & (1 << i)) == 0) continue;
+
+                    var d = worldDirs[i];
+
+                    if (!IsOpaque(x + d.X, y + d.Y, z + d.Z)) return false;
+                }
+
+                return true;
+            }
 
             void Swap(ushort[] arr) {
 
@@ -568,7 +626,20 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 };
             }
 
-            bool IsOpaque(int cx, int cy, int cz) => GetBlockSafe(cx, cy, cz).Opaque;
+            bool IsOpaque(int cx, int cy, int cz) {
+
+                var b = GetBlockSafe(cx, cy, cz);
+
+                if (b.Opaque) return true;
+                if (b.Id == 0) return false;
+
+                // Connection-based culling
+                if (Registry.CanConnect(block.Id, b.Id)) return true;
+
+                // Smart culling: Transparent blocks act as opaque if fully enclosed by naturally opaque blocks
+                return Registry.IsOpaque(GetBlockSafe(cx + 1, cy, cz).Id) && Registry.IsOpaque(GetBlockSafe(cx - 1, cy, cz).Id) && Registry.IsOpaque(GetBlockSafe(cx, cy + 1, cz).Id) && Registry.IsOpaque(GetBlockSafe(cx, cy - 1, cz).Id) && Registry.IsOpaque(GetBlockSafe(cx, cy, cz + 1).Id) && Registry.IsOpaque(GetBlockSafe(cx, cy, cz - 1).Id);
+            }
+
             bool IsSolid(int cx, int cy, int cz) => GetBlockSafe(cx, cy, cz).Solid;
         }
 
@@ -669,6 +740,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 mesh.Uvs.Add(v2); // BL
                 mesh.Uvs.Add(u1);
                 mesh.Uvs.Add(v1); // TL
+
                 break;
 
             default:
@@ -680,7 +752,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 mesh.Uvs.Add(v2); // BR
                 mesh.Uvs.Add(u1);
                 mesh.Uvs.Add(v2); // BL
+
                 break;
+
         }
 
         for (var k = 0; k < 4; k++) {

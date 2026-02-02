@@ -130,7 +130,8 @@ internal static class Registry {
                     Luminance = lum,
                     Model = model,
                     Facing = Enum.TryParse<FacingMode>(blockDef.Facing, true, out var facing) ? facing : FacingMode.Fixed,
-                    DefaultYaw = blockDef.Yaw
+                    DefaultYaw = blockDef.Yaw,
+                    ConnectRaw = blockDef.Connect
                 };
 
                 loadedBlocks.Add(info);
@@ -143,28 +144,45 @@ internal static class Registry {
         // Build Atlas
         GenerateAtlas(projectRoot, texturePaths);
 
-        // Register Blocks and Bake UVs
+        // Register Blocks and Map IDs
         foreach (var b in loadedBlocks.TakeWhile(b => b.Id < 255)) {
 
             Blocks[b.Id] = b;
             BlockIdMap[b.Name] = b.Id;
             BlockIdMap[b.Name.ToLower()] = b.Id; // Register lower case too
+        }
+
+        // Resolve Connection IDs
+        foreach (var b in loadedBlocks) {
+
+            if (string.IsNullOrEmpty(b.ConnectRaw)) continue;
+
+            var parts = b.ConnectRaw.Split(',');
+
+            foreach (var part in parts) {
+
+                var targetId = GetId(part.Trim());
+                if (targetId != 0) b.ConnectIds.Add(targetId);
+            }
+        }
+
+        // Bake UVs
+        foreach (var b in loadedBlocks.TakeWhile(b => b.Id < 255)) {
 
             // 0:North(-Z), 1:East(+X), 2:South(+Z), 3:West(-X), 4:Up(+Y), 5:Down(-Y)
             BlockFaceUvs[b.Id] = new UvInfo[6];
 
-            if (b.Model is { Elements.Count: > 0 }) {
+            if (b.Model is not { Elements.Count: > 0 }) continue;
 
-                // Use first element for simple blocks
-                var el = b.Model.Elements[0];
+            // Use first element for simple blocks
+            var el = b.Model.Elements[0];
 
-                BlockFaceUvs[b.Id][0] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("north"));
-                BlockFaceUvs[b.Id][1] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("east"));
-                BlockFaceUvs[b.Id][2] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("south"));
-                BlockFaceUvs[b.Id][3] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("west"));
-                BlockFaceUvs[b.Id][4] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("up"));
-                BlockFaceUvs[b.Id][5] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("down"));
-            }
+            BlockFaceUvs[b.Id][0] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("north"));
+            BlockFaceUvs[b.Id][1] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("east"));
+            BlockFaceUvs[b.Id][2] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("south"));
+            BlockFaceUvs[b.Id][3] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("west"));
+            BlockFaceUvs[b.Id][4] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("up"));
+            BlockFaceUvs[b.Id][5] = ResolveFaceUv(b.Model, el.Faces.GetValueOrDefault("down"));
         }
     }
 
@@ -172,7 +190,6 @@ internal static class Registry {
 
         if (face == null) return new UvInfo();
 
-        // Resolve texture reference (e.g., "#1" -> "Textures/GrassSide")
         var texRef = face.Texture;
 
         while (texRef.StartsWith('#')) {
@@ -190,17 +207,57 @@ internal static class Registry {
         // Maps the sub-region to the Atlas UV region.
         // AtlasUv provides X, Y, W, H in 0-1 range.
 
-        var subX = face.Uv[0] / 16.0f;
-        var subY = face.Uv[1] / 16.0f;
-        var subW = (face.Uv[2] - face.Uv[0]) / 16.0f;
-        var subH = (face.Uv[3] - face.Uv[1]) / 16.0f;
+        // Resolve sub-UVs (0-16 pixels)
+        var u0 = face.Uv[0];
+        var v0 = face.Uv[1];
+        var u1 = face.Uv[2];
+        var v1 = face.Uv[3];
+
+        // Apply padding to the absolute edges of the texture to avoid bleeding into atlas padding
+        const float p = 0.01f;
+        if (u0 <= 0.001f) u0 += p;
+        if (v0 <= 0.001f) v0 += p;
+        if (u1 >= 15.999f) u1 -= p;
+        if (v1 >= 15.999f) v1 -= p;
+
+        var subX = u0 / 16.0f;
+        var subY = v0 / 16.0f;
+        var subW = (u1 - u0) / 16.0f;
+        var subH = (v1 - v0) / 16.0f;
+
+        byte mask = 0;
+
+        if (string.IsNullOrEmpty(face.CullFace)) {
+
+            mask = 0x3F; // Default: north, east, south, west, up, down
+
+        } else {
+
+            var parts = face.CullFace.Split(',');
+
+            foreach (var part in parts) {
+
+                var s = part.Trim().ToLower();
+
+                switch (s) {
+
+                    case "north": mask |= 1; break;
+                    case "east":  mask |= 2; break;
+                    case "south": mask |= 4; break;
+                    case "west":  mask |= 8; break;
+                    case "up":    mask |= 16; break;
+                    case "down":  mask |= 32; break;
+                }
+            }
+        }
 
         return new UvInfo {
             X = atlasUv.X + subX * atlasUv.Width,
             Y = atlasUv.Y + subY * atlasUv.Height,
             Width = subW * atlasUv.Width,
             Height = subH * atlasUv.Height,
-            Rotation = face.Rotation
+            Rotation = face.Rotation,
+            CullMask = mask
         };
     }
 
@@ -209,7 +266,7 @@ internal static class Registry {
         var images = new List<(string Name, Image Img)>();
         var totalWidth = 0;
         var maxHeight = 0;
-        const int spacing = 0; // Padding handled manually or not needed if exact mapping
+        const int spacing = 4;
 
         foreach (var texPath in distinctTextures) {
 
@@ -227,12 +284,19 @@ internal static class Registry {
         if (totalWidth == 0) totalWidth = 16;
         if (maxHeight == 0) maxHeight = 16;
 
-        var atlasImg = GenImageColor(totalWidth, maxHeight, new Color(0, 0, 0, 0));
+        // Use an opaque earth-tone background (approx dirt/grass color) to hide bleeding
+        var atlasImg = GenImageColor(totalWidth, maxHeight, new Color(110, 100, 70, 255));
         var currentX = 0;
 
         foreach (var (name, img) in images) {
 
-            ImageDraw(ref atlasImg, img, new Rectangle(0, 0, img.Width, img.Height), new Rectangle(currentX, 0, img.Width, img.Height), Color.White);
+            // Manual copy to overwrite alpha
+            for (var py = 0; py < img.Height; py++)
+            for (var px = 0; px < img.Width; px++) {
+
+                var pixel = GetImageColor(img, px, py);
+                ImageDrawPixel(ref atlasImg, currentX + px, py, pixel);
+            }
 
             TextureMap[name] = new UvInfo { X = (float)currentX / totalWidth, Y = 0, Width = (float)img.Width / totalWidth, Height = (float)img.Height / maxHeight };
 
@@ -269,4 +333,11 @@ internal static class Registry {
     public static ModelJson? GetModel(byte id) => Blocks[id].Model;
     public static FacingMode GetFacing(byte id) => Blocks[id].Facing;
     public static int GetYawStep(byte id) => Blocks[id].DefaultYaw;
+
+    public static bool CanConnect(byte id, byte neighborId) {
+
+        if (id == 0 || neighborId == 0) return false;
+
+        return Blocks[id].ConnectIds.Contains(neighborId);
+    }
 }

@@ -1,3 +1,5 @@
 {
-    "Model": "OakLeaves"
+    "Model": "OakLeaves",
+    "Opaque": false,
+    "Connect": "OakLeaves"
 }

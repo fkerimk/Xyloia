@@ -11,6 +11,8 @@ internal class BlockInfo {
 
     public FacingMode Facing = FacingMode.Fixed;
     public int DefaultYaw = 0;
+    public string? ConnectRaw;
+    public readonly HashSet<byte> ConnectIds = [];
 }
 
 internal enum FacingMode {

@@ -1,6 +1,7 @@
 {
-	"parent": "Models/Block",
-	"textures": {
-		"all": "Textures/OakLeaves"
-	}
+    "parent": "Models/Leaves",
+    "textures": {
+        "all": "Textures/OakLeaves",
+        "bush": "Textures/OakLeavesBush"
+    }
 }
