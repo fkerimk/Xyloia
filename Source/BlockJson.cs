@@ -4,4 +4,6 @@
     public float[] Luminance { get; init; } = [0, 0, 0];
     public bool Solid { get; init; } = true;
     public bool Opaque { get; init; } = true;
+    public string Facing { get; init; } = "Fixed";
+    public int Yaw { get; init; } = 90;
 }

@@ -6,19 +6,17 @@ internal static class Registry {
 
     public static Texture2D AtlasTexture;
 
-    // ID -> Block Info
     private static readonly BlockInfo[] Blocks = new BlockInfo[256];
     private static readonly Dictionary<string, byte> BlockIdMap = [];
 
-    // Texture Name (e.g., "Textures/GrassTop") -> UvInfo in Atlas
     private static readonly Dictionary<string, UvInfo> TextureMap = [];
 
-    // Pre-calculated UVs for each block's standard faces - 0:North(Z-), 1:East(X+), 2:South(Z+), 3:West(X-), 4:Up(Y+), 5:Down(Y-)
+    // 0:North(Z-), 1:East(X+), 2:South(Z+), 3:West(X-), 4:Up(Y+), 5:Down(Y-)
     private static readonly UvInfo[][] BlockFaceUvs = new UvInfo[256][];
 
     public static void Initialize(string projectRoot) {
 
-        // 0 is Air
+        // 0 is air
         Blocks[0] = new BlockInfo { Name = "air", Solid = false, Opaque = false, Id = 0 };
         BlockIdMap["air"] = 0;
         BlockFaceUvs[0] = new UvInfo[6];
@@ -131,6 +129,8 @@ internal static class Registry {
                     Opaque = blockDef.Opaque,
                     Luminance = lum,
                     Model = model,
+                    Facing = Enum.TryParse<FacingMode>(blockDef.Facing, true, out var facing) ? facing : FacingMode.Fixed,
+                    DefaultYaw = blockDef.Yaw
                 };
 
                 loadedBlocks.Add(info);
@@ -267,5 +267,6 @@ internal static class Registry {
     public static bool IsSolid(byte id) => Blocks[id].Solid;
     public static bool IsOpaque(byte id) => Blocks[id].Opaque;
     public static ModelJson? GetModel(byte id) => Blocks[id].Model;
-
+    public static FacingMode GetFacing(byte id) => Blocks[id].Facing;
+    public static int GetYawStep(byte id) => Blocks[id].DefaultYaw;
 }

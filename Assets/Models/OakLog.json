@@ -1,0 +1,9 @@
+{
+	"parent": "Models/Block",
+	"textures": {
+		"all": "Textures/OakLogSide",
+		"u": "Textures/OakLogTop",
+		"d": "Textures/OakLogTop",
+		"particle": "Textures/OakLogSide"
+	}
+}

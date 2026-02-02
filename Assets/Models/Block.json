@@ -1,0 +1,26 @@
+{
+	"textures": {
+		"all": "Textures/DebugN",
+		"n": "#all",
+		"e": "#all",
+		"s": "#all",
+		"w": "#all",
+		"u": "#all",
+		"d": "#all",
+		"particle": "#n"
+	},
+	"elements": [
+		{
+			"from": [0, 0, 0],
+			"to": [16, 16, 16],
+			"faces": {
+				"north": {"uv": [0, 0, 16, 16], "texture": "#n", "cullface": "north"},
+				"east": {"uv": [0, 0, 16, 16], "texture": "#e", "cullface": "east"},
+				"south": {"uv": [0, 0, 16, 16], "texture": "#s", "cullface": "south"},
+				"west": {"uv": [0, 0, 16, 16], "texture": "#w", "cullface": "west"},
+				"up": {"uv": [0, 0, 16, 16], "texture": "#u", "cullface": "up"},
+				"down": {"uv": [0, 0, 16, 16], "texture": "#d", "cullface": "down"}
+			}
+		}
+	]
+}

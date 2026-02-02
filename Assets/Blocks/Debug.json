@@ -2,5 +2,7 @@
     "Model": "Debug",
     "Luminance": [255, 0, 0],
     "Solid": true,
-    "Opaque": true
+    "Opaque": true,
+    "Facing": "Fixed",
+    "Yaw": 90
 }

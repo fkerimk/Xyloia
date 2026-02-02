@@ -1,4 +1,6 @@
 {
     "Model": "Test",
-    "Opaque": false
+    "Opaque": false,
+    "Facing": "Yaw",
+    "Yaw": 45
 }

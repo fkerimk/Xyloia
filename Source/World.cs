@@ -298,19 +298,22 @@ internal class World {
         return 0;
     }
 
-    public void SetBlock(int x, int y, int z, byte blockId) {
+    public void SetBlock(int x, int y, int z, byte blockId) => SetBlock(x, y, z, new Block(blockId));
+
+    public void SetBlock(int x, int y, int z, Block block) {
 
         var blockPos = new ChunkPos(x >> 4, y >> 8, z >> 4);
 
         if (!_chunks.ContainsKey(blockPos)) return;
 
+        var blockId = block.Id;
         var oldBlock = GetBlock(x, y, z);
         var oldLum = Registry.GetLuminance(oldBlock.Id);
         var newLum = Registry.GetLuminance(blockId);
         var oldTranslucent = !Registry.IsOpaque(oldBlock.Id);
         var newTranslucent = !Registry.IsOpaque(blockId);
 
-        if (oldBlock.Id == blockId) return;
+        if (oldBlock.Id == blockId && oldBlock.Data == block.Data) return;
 
         var cx = x >> 4;
         var cy = y >> 8;
@@ -321,12 +324,13 @@ internal class World {
 
         if (!_chunks.TryGetValue(new ChunkPos(cx, cy, cz), out var chunk)) return;
 
-        chunk.SetBlock(lx, ly, lz, new Block(blockId));
+        chunk.SetBlock(lx, ly, lz, block);
 
         // Block Light Update
 
         // Remove old light if it was an emitter
         if (oldLum.R > 0 || oldLum.G > 0 || oldLum.B > 0) {
+
             RemoveLight(x, y, z, true);
         }
 

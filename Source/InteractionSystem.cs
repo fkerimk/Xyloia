@@ -219,7 +219,7 @@ internal class InteractionSystem(World world) {
             var nPtr = mesh.Normals + vIdx * 3;
 
             for (var k = 0; k < 4; k++) {
-                
+
                 nPtr[k * 3 + 0] = n.X;
                 nPtr[k * 3 + 1] = n.Y;
                 nPtr[k * 3 + 2] = n.Z;
@@ -234,33 +234,37 @@ internal class InteractionSystem(World world) {
             Vector2 uv1, uv2, uv3, uv4;
 
             switch (uv.Rotation) {
-                
+
                 case 90:
                     uv1 = new Vector2(u1, v1); // P1(BL) gets TL texture
                     uv2 = new Vector2(u1, v2); // P2(BR) gets BL texture
                     uv3 = new Vector2(u2, v2); // P3(TR) gets BR texture
                     uv4 = new Vector2(u2, v1); // P4(TL) gets TR texture
+
                     break;
                 case 180:
-                    
+
                     uv1 = new Vector2(u2, v1);
                     uv2 = new Vector2(u1, v1);
                     uv3 = new Vector2(u1, v2);
                     uv4 = new Vector2(u2, v2);
+
                     break;
                 case 270:
-                    
+
                     uv1 = new Vector2(u2, v2);
                     uv2 = new Vector2(u2, v1);
                     uv3 = new Vector2(u1, v1);
                     uv4 = new Vector2(u1, v2);
+
                     break;
-                
+
                 default:
                     uv1 = new Vector2(u1, v2); // BL
                     uv2 = new Vector2(u2, v2); // BR
                     uv3 = new Vector2(u2, v1); // TR
                     uv4 = new Vector2(u1, v1); // TL
+
                     break;
             }
 
@@ -313,7 +317,39 @@ internal class InteractionSystem(World world) {
 
             } else if (IsMouseButtonPressed(MouseButton.Right)) {
 
-                world.SetBlock(_currentHit.X + _currentHit.FaceX, _currentHit.Y + _currentHit.FaceY, _currentHit.Z + _currentHit.FaceZ, _selectedBlockId);
+                var facing = Registry.GetFacing(_selectedBlockId);
+                byte data = 0;
+
+                switch (facing) {
+
+                    case FacingMode.Yaw: {
+
+                        var step = Registry.GetYawStep(_selectedBlockId);
+                        if (step <= 0) step = 90;
+
+                        // Yaw relative to camera
+                        var angle = Math.Atan2(camDir.X, camDir.Z) * (180 / Math.PI);
+
+                        // Normalize angle to 0..360
+                        if (angle < 0) angle += 360;
+
+                        var q = (int)Math.Round(angle / step);
+
+                        data = (byte)q;
+
+                        break;
+                    }
+
+                    case FacingMode.Rotate when _currentHit.FaceX != 0: data = 1; break; // X aligned
+                    case FacingMode.Rotate when _currentHit.FaceZ != 0: data = 2; break; // Z aligned
+                    case FacingMode.Rotate:                             data = 0; break; // Y aligned
+
+                    case FacingMode.Fixed:
+                    default:
+                        break;
+                }
+
+                world.SetBlock(_currentHit.X + _currentHit.FaceX, _currentHit.Y + _currentHit.FaceY, _currentHit.Z + _currentHit.FaceZ, new Block(_selectedBlockId, data));
             }
         }
     }

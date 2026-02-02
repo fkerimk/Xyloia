@@ -1,24 +1,9 @@
 {
-	"format_version": "1.21.11",
-	"credit": "Made with Blockbench",
+	"parent": "Models/Block",
 	"textures": {
-		"0": "Textures/GrassTop",
-		"1": "Textures/GrassSide",
-		"2": "Textures/Dirt",
+		"all": "Textures/GrassSide",
+		"u": "Textures/GrassTop",
+		"d": "Textures/Dirt",
 		"particle": "Textures/Dirt"
-	},
-	"elements": [
-		{
-			"from": [0, 0, 0],
-			"to": [16, 16, 16],
-			"faces": {
-				"north": {"uv": [0, 0, 16, 16], "texture": "#1", "cullface": "north"},
-				"east": {"uv": [0, 0, 16, 16], "texture": "#1", "cullface": "east"},
-				"south": {"uv": [0, 0, 16, 16], "texture": "#1", "cullface": "south"},
-				"west": {"uv": [0, 0, 16, 16], "texture": "#1", "cullface": "west"},
-				"up": {"uv": [0, 0, 16, 16], "texture": "#0", "cullface": "up"},
-				"down": {"uv": [0, 0, 16, 16], "texture": "#2", "cullface": "down"}
-			}
-		}
-	]
+	}
 }

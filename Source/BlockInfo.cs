@@ -8,4 +8,12 @@ internal class BlockInfo {
     public bool Opaque;
     public Color Luminance;
     public ModelJson? Model;
+
+    public FacingMode Facing = FacingMode.Fixed;
+    public int DefaultYaw = 0;
+}
+
+internal enum FacingMode {
+
+    Fixed, Yaw, Rotate
 }
