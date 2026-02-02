@@ -11,16 +11,29 @@ uniform mat4 mvp;
 uniform mat4 matModel;
 
 uniform vec3 dynLightPos;
+uniform float animTime;
+uniform float unloadTimer;
 
 // Output vertex attributes (to fragment shader)
 out vec2 fragTexCoord;
 out vec4 fragColor;
 
 void main() {
-
-    // Raylib sends unsigned byte as normalized float.
-    // e.g. 255 -> 1.0.
     
+    // Animation: Fade In / Out
+    float alpha = 1.0;
+    float animSpeed = 4.0;
+
+    if (animTime < 1.0 / animSpeed) {
+        alpha = clamp(animTime * animSpeed, 0.0, 1.0);
+    }
+    
+    if (unloadTimer > 0.0) {
+        float fadeOut = 1.0 - clamp(unloadTimer * animSpeed, 0.0, 1.0);
+        alpha = min(alpha, fadeOut);
+    }
+    
+    // Raylib sends unsigned byte as normalized float. e.g. 255 -> 1.0.
     int valR = int(round(vertexColor.r * 255.0));
     int valG = int(round(vertexColor.g * 255.0));
     
@@ -112,7 +125,7 @@ void main() {
     cb = max(cb, 0.05);
 
     // Pass final color to fragment shader
-    fragColor = vec4(cr, cg, cb, 1.0);
+    fragColor = vec4(cr, cg, cb, alpha);
     
     fragTexCoord = vertexTexCoord;
     gl_Position = mvp * vec4(vertexPosition, 1.0);

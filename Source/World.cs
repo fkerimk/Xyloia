@@ -626,6 +626,7 @@ internal class World {
                             if (distSq > (ViewDistance + 2) * (ViewDistance + 2)) return;
 
                             var chunk = new Chunk(pos.X, pos.Y, pos.Z);
+                            chunk.SpawnTime = GetTime();
                             chunk.Generate();
 
                             if (_chunks.TryAdd(pos, chunk)) {
@@ -808,13 +809,27 @@ internal class World {
                     if (!_chunks.TryRemove(pos, out var chunk)) continue;
 
                     _renderList.Remove(chunk);
-                    chunk.Unload();
+                    
+                    chunk.UnloadTime = GetTime();
+                    _dyingChunks.Add(chunk);
                 }
             }
+        }
+        
+        for (var i = _dyingChunks.Count - 1; i >= 0; i--) {
+            
+            var chunk = _dyingChunks[i];
+            var elapsed = GetTime() - chunk.UnloadTime;
+
+            if (!(elapsed > 0.5)) continue;
+                
+            chunk.Unload();
+            _dyingChunks.RemoveAt(i);
         }
     }
 
     private readonly List<Chunk> _renderList = [];
+    private readonly List<Chunk> _dyingChunks = [];
     private readonly Lock _renderLock = new();
     private int _frameCounter;
 
@@ -822,9 +837,12 @@ internal class World {
 
         var camDir = Vector3.Normalize(camera.Target - camera.Position);
         var camPos = camera.Position;
+        
+        var loadAnimLoc = GetShaderLocation(material.Shader, "animTime");
+        var unloadTimerLoc = GetShaderLocation(material.Shader, "unloadTimer");
 
         var aspect = (float)GetScreenWidth() / GetScreenHeight();
-        var frustum = new Frustum(camera, aspect, 0.5f, (ViewDistance + 4) * 16f);
+        var frustum = new Frustum(camera, aspect, 0.5f, (ViewDistance + 8) * 16f); // Far Plane increased for fade-out headroom
 
         var count = _renderList.Count;
 
@@ -867,8 +885,8 @@ internal class World {
 
             switch (distSq) {
 
-                // Broad distance culling (Total 3D distance)
-                case > (ViewDistance * Chunk.Width + 64) * (ViewDistance * Chunk.Width + 64): continue;
+                // Broad distance culling (Total 3D distance) - Increased +128 to allow fade-out without popping
+                case > (ViewDistance * Chunk.Width + 128) * (ViewDistance * Chunk.Width + 128): continue;
 
                 // Dot product culling (Frustum-lite)
                 case > 16384: {
@@ -884,8 +902,27 @@ internal class World {
 
             foreach (var mesh in chunk.Meshes) {
 
+                SetShaderValue(material.Shader, loadAnimLoc, (float)(GetTime() - chunk.SpawnTime), ShaderUniformDataType.Float);
+                SetShaderValue(material.Shader, unloadTimerLoc, 0f, ShaderUniformDataType.Float);
                 DrawMesh(mesh, material, Raymath.MatrixTranslate(chunk.X * Chunk.Width, 0, chunk.Z * Chunk.Depth));
             }
+        }
+        
+        // Render Dying Chunks
+        foreach (var chunk in _dyingChunks) {
+            
+            // Frustum Culling for Dying
+             var min = new Vector3(chunk.X * Chunk.Width, 0, chunk.Z * Chunk.Depth);
+             var max = new Vector3(min.X + Chunk.Width, Chunk.Height, min.Z + Chunk.Depth);
+ 
+             if (!frustum.IntersectsBox(min, max)) continue;
+             
+             foreach (var mesh in chunk.Meshes) {
+ 
+                 SetShaderValue(material.Shader, loadAnimLoc, (float)(GetTime() - chunk.SpawnTime), ShaderUniformDataType.Float);
+                 SetShaderValue(material.Shader, unloadTimerLoc, (float)(GetTime() - chunk.UnloadTime), ShaderUniformDataType.Float);
+                 DrawMesh(mesh, material, Raymath.MatrixTranslate(chunk.X * Chunk.Width, 0, chunk.Z * Chunk.Depth));
+             }
         }
     }
 

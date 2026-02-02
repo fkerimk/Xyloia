@@ -15,6 +15,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
     public readonly int X = x, Y = y, Z = z;
 
+    public double SpawnTime;
+    public double UnloadTime;
+
     public readonly List<Mesh> Meshes = [];
     public readonly List<int> LightEmitters = [];
 
@@ -193,97 +196,80 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                 if (block.Id == 0) continue;
 
+                // Optimization: If a block (Simple or Complex) is fully surrounded by Opaque blocks, don't draw it.
+                if (IsHidden(x, y, z, -1, 4, pBlocks)) continue;
+
                 if (Registry.IsSimple(block.Id) && block.Data == 0) {
 
                     var faceLights = new ushort[4];
 
                     // North (Z-1) | Face 0
-                    if (z > 0 ? !pBlocks[idx - Height].Opaque : !(nz != null && nz.GetBlock(x, y, 15).Opaque)) {
-
-                        var uv = Registry.GetFaceUv(block.Id, 0);
+                    if (!IsOpaque(x, y, z - 1, pBlocks)) {
 
                         // Optimized FillLights for internal blocks, fallback for edges
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254) {
+                        var uv = Registry.GetFaceUv(block.Id, 0);
 
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
                             FillLightsSimple(idx - Height, -1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
-
-                        } else {
-
+                        else
                             FillLights(x, y, z - 1, -1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
-                        }
 
                         Swap(faceLights);
                         AddFace(builder, x, y, z, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, uv, faceLights);
                     }
 
                     // South (Z+1) | Face 2
-                    if (z < 15 ? !pBlocks[idx + Height].Opaque : !(pz != null && pz.GetBlock(x, y, 0).Opaque)) {
+                    if (!IsOpaque(x, y, z + 1, pBlocks)) {
 
                         var uv = Registry.GetFaceUv(block.Id, 2);
 
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254) {
-
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
                             FillLightsSimple(idx + Height, 1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
-
-                        } else {
-
+                        else
                             FillLights(x, y, z + 1, 1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
-                        }
 
                         Swap(faceLights);
                         AddFace(builder, x, y, z, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, uv, faceLights);
                     }
 
                     // East (X+1) | Face 1
-                    if (x < 15 ? !pBlocks[idx + Depth * Height].Opaque : !(px != null && px.GetBlock(0, y, z).Opaque)) {
+                    if (!IsOpaque(x + 1, y, z, pBlocks)) {
 
                         var uv = Registry.GetFaceUv(block.Id, 1);
 
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254) {
-
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
                             FillLightsSimple(idx + Depth * Height, 0, 0, -1, 0, 1, 0, faceLights, pLight, pBlocks);
-
-                        } else {
-
+                        else
                             FillLights(x + 1, y, z, 0, 0, -1, 0, 1, 0, faceLights, pLight, pBlocks);
-                        }
 
                         Swap(faceLights);
                         AddFace(builder, x, y, z, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, uv, faceLights);
                     }
 
                     // West (X-1) | Face 3
-                    if (x > 0 ? !pBlocks[idx - Depth * Height].Opaque : !(nx != null && nx.GetBlock(15, y, z).Opaque)) {
+                    if (!IsOpaque(x - 1, y, z, pBlocks)) {
 
                         var uv = Registry.GetFaceUv(block.Id, 3);
 
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254) {
-
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
                             FillLightsSimple(idx - Depth * Height, 0, 0, 1, 0, 1, 0, faceLights, pLight, pBlocks);
-
-                        } else {
-
+                        else
                             FillLights(x - 1, y, z, 0, 0, 1, 0, 1, 0, faceLights, pLight, pBlocks);
-                        }
 
                         Swap(faceLights);
                         AddFace(builder, x, y, z, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, -1, 0, 0, uv, faceLights);
                     }
 
                     // Up (Y+1) | Face 4
-                    if (y < 255 ? !pBlocks[idx + 1].Opaque : !(py != null && py.GetBlock(x, 0, z).Opaque)) {
+                    if (!IsOpaque(x, y + 1, z, pBlocks)) {
 
                         // Assuming global height > 256 handled by py
                         var uv = Registry.GetFaceUv(block.Id);
 
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254) {
-
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
                             FillLightsSimple(idx + 1, 1, 0, 0, 0, 0, -1, faceLights, pLight, pBlocks);
-
-                        } else {
-
+                        else
                             FillLights(x, y + 1, z, 1, 0, 0, 0, 0, -1, faceLights, pLight, pBlocks);
-                        }
 
                         Swap(faceLights);
 
@@ -292,18 +278,14 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                     }
 
                     // Down (Y-1) | Face 5
-                    if (y > 0 ? !pBlocks[idx - 1].Opaque : !(ny != null && ny.GetBlock(x, 255, z).Opaque)) {
+                    if (!IsOpaque(x, y - 1, z, pBlocks)) {
 
                         var uv = Registry.GetFaceUv(block.Id, 5);
 
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254) {
-
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
                             FillLightsSimple(idx - 1, 1, 0, 0, 0, 0, 1, faceLights, pLight, pBlocks);
-
-                        } else {
-
+                        else
                             FillLights(x, y - 1, z, 1, 0, 0, 0, 0, 1, faceLights, pLight, pBlocks);
-                        }
 
                         SwapPairs(faceLights);
                         AddFace(builder, x, y, z, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, -1, 0, uv, faceLights);
@@ -842,6 +824,39 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                 }
 
+                // Recursive check to see if a block is encased in opaque blocks
+                bool IsHidden(int cx, int cy, int cz, int ignoreFace, int depth, Block* pB) {
+
+                    if (depth <= 0) return false; // If too deep, assume visible to avoid glitches.
+
+                    // Check neighbors. If all lead to Opaque blocks (or recursed hidden), then True. If ANY leads to Air (or visible boundary), then False..
+                    if (ignoreFace != 0 && !CheckDir(cx, cy, cz - 1, 2)) return false;
+                    if (ignoreFace != 2 && !CheckDir(cx, cy, cz + 1, 0)) return false;
+                    if (ignoreFace != 1 && !CheckDir(cx + 1, cy, cz, 3)) return false;
+                    if (ignoreFace != 3 && !CheckDir(cx - 1, cy, cz, 1)) return false;
+                    if (ignoreFace != 4 && !CheckDir(cx, cy + 1, cz, 5)) return false;
+                    if (ignoreFace != 5 && !CheckDir(cx, cy - 1, cz, 4)) return false;
+
+                    return true;
+
+                    bool CheckDir(int nX, int nY, int nZ, int newIgnore) {
+
+                        Block nb;
+
+                        // Fast path for internal blocks
+                        if (nX is >= 0 and < 16 && nY is >= 0 and < 256 && nZ is >= 0 and < 16)
+                            nb = pB[(nX * Depth + nZ) * Height + nY];
+                        else
+                            nb = GetBlockSafe(nX, nY, nZ, pB);
+
+                        if (nb.Opaque) return true;
+                        if (nb.Id == 0) return false; // Air -> Visible!
+
+                        // Transparent/Complex block. Recurse.
+                        return IsHidden(nX, nY, nZ, newIgnore, depth - 1, pB);
+                    }
+                }
+
                 bool IsOpaque(int cx, int cy, int cz, Block* pB) {
 
                     var b = GetBlockSafe(cx, cy, cz, pB);
@@ -849,9 +864,11 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                     if (b.Opaque) return true;
                     if (b.Id == 0) return false;
 
+                    if (IsHidden(cx, cy, cz, -1, 4, pB)) return true; // Depth 4 is usually enough for thick walls
+
                     // Connection-based culling
                     if (Registry.CanConnect(block.Id, b.Id)) return true;
-                    
+
                     // Only allow if the neighbor contains a model element that covers the full volume.
                     if (!Registry.IsFullBlock(b.Id)) return false;
 
@@ -859,10 +876,10 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                     // Clump-aware surrounded check.
                     bool IsOpaqueNb(int xOffset, int yOffset, int zOffset) {
-                        
+
                         var nb = GetBlockSafe(cx + xOffset, cy + yOffset, cz + zOffset, pB);
 
-                        return nb.Opaque || Registry.CanConnect(b.Id, nb.Id);
+                        return nb.Opaque;
                     }
                 }
 

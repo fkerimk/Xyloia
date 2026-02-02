@@ -20,11 +20,11 @@ internal static class Program {
         SetMaterialTexture(ref material, MaterialMapIndex.Albedo, Registry.AtlasTexture);
 
         var chunkShader = LoadShader("Assets/Shaders/Chunk.vs", "Assets/Shaders/Chunk.fs");
-        
+
         material.Shader = chunkShader;
-        
+
         var crosshairTexture = LoadTexture("Assets/Textures/Crosshair.png");
-        
+
         var dynLightLoc = GetShaderLocation(chunkShader, "dynLightPos");
 
         var world = new World();
@@ -41,7 +41,7 @@ internal static class Program {
         var interaction = new InteractionSystem(world);
         interaction.Initialize();
 
-        var freeCamMode = false;
+        var noclip = false;
         var dynamicLight = false;
 
         var initialDir = Vector3.Normalize(cam.Target - cam.Position);
@@ -57,14 +57,11 @@ internal static class Program {
 
             var dt = GetFrameTime();
 
-            if (!freeCamMode) {
-
-                controller.FrameUpdate(dt);
-            }
+            if (!noclip) controller.FrameUpdate(dt);
 
             // Dynamic Light Toggle
-            if (IsKeyPressed(KeyboardKey.F)) dynamicLight = !dynamicLight;
-            
+            if (IsKeyPressed(KeyboardKey.L)) dynamicLight = !dynamicLight;
+
             world.UpdateDynamicLight(cam.Position, dynamicLight);
 
             SetShaderValue(chunkShader, dynLightLoc, dynamicLight ? cam.Position : new Vector3(99999, 99999, 99999), ShaderUniformDataType.Vec3);
@@ -72,22 +69,22 @@ internal static class Program {
             world.Update(cam.Position);
 
             if (!spawned && world.IsChunkLoaded(0, 0, 0)) {
-                
+
                 const int spawnX = Chunk.Width / 2;
                 const int spawnZ = Chunk.Depth / 2;
                 var spawnY = world.GetTopBlockHeight(spawnX, spawnZ) + 2;
-                
+
                 controller.Position = new Vector3(spawnX, spawnY, spawnZ);
                 controller.SetRotation(yaw, pitch);
                 spawned = true;
             }
 
             // Toggle camera
-            if (IsKeyPressed(KeyboardKey.N)) {
+            if (IsKeyPressed(KeyboardKey.V)) {
 
-                freeCamMode = !freeCamMode;
+                noclip = !noclip;
 
-                if (freeCamMode) {
+                if (noclip) {
 
                     // Switch to free cam
                     cam.Position = controller.CameraPosition;
@@ -105,7 +102,7 @@ internal static class Program {
                 }
             }
 
-            if (freeCamMode) {
+            if (noclip) {
 
                 var md = GetMouseDelta();
                 yaw += md.X * 0.005f;
@@ -116,8 +113,12 @@ internal static class Program {
                 var rgt = Vector3.Normalize(Vector3.Cross(dir, Vector3.UnitY));
                 var up = Vector3.Normalize(Vector3.Cross(rgt, dir));
 
-                var speed = IsKeyDown(KeyboardKey.LeftControl) ? 200f : IsKeyDown(KeyboardKey.LeftShift) ? 60f : 30f;
-                
+                var speed = IsKeyDown(KeyboardKey.LeftControl)
+                    ? 200f
+                    : IsKeyDown(KeyboardKey.LeftShift)
+                        ? 60f
+                        : 30f;
+
                 const float accel = 10.0f;
                 const float friction = 6.0f;
 
@@ -132,17 +133,14 @@ internal static class Program {
                 if (input.LengthSquared() > 0) input = Vector3.Normalize(input);
 
                 freeCamVelocity = Vector3.Lerp(freeCamVelocity, input * speed, Math.Clamp(accel * dt, 0, 1));
-                
-                if (input.LengthSquared() < 0.01f) {
-                    
-                    freeCamVelocity = Vector3.Lerp(freeCamVelocity, Vector3.Zero, Math.Clamp(friction * dt, 0, 1));
-                }
+
+                if (input.LengthSquared() < 0.01f) freeCamVelocity = Vector3.Lerp(freeCamVelocity, Vector3.Zero, Math.Clamp(friction * dt, 0, 1));
 
                 cam.Position += freeCamVelocity * dt;
                 cam.Target = cam.Position + dir;
 
             } else {
-                
+
                 freeCamVelocity = Vector3.Zero; // Reset when not in use
                 cam.Position = controller.CameraPosition;
                 cam.Target = controller.GetCameraTarget();
@@ -165,7 +163,7 @@ internal static class Program {
             const float crosshairScale = 1.0f;
             var cw = crosshairTexture.Width * crosshairScale;
             var ch = crosshairTexture.Height * crosshairScale;
-            
+
             Rlgl.SetBlendFactors(0x0307, 0x0303, 0x8006); // GL_ONE_MINUS_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA, GL_FUNC_ADD
             Rlgl.SetBlendMode(BlendMode.Custom);
             DrawTextureEx(crosshairTexture, new Vector2(GetScreenWidth() / 2f - cw / 2f, GetScreenHeight() / 2f - ch / 2f), 0, crosshairScale, Color.White);
@@ -173,8 +171,8 @@ internal static class Program {
 
             DrawFPS(10, 10);
             DrawText($"{controller.Position:F2}".TrimStart('<').TrimEnd('>'), 10, 30, 20, Color.Yellow);
-            DrawText("[N] Free Cam", 10, 50, 20, freeCamMode ? Color.Green : Color.Red);
-            DrawText("[F] Dynamic Light", 10, 70, 20, dynamicLight ? Color.Green : Color.Red);
+            DrawText("[V] Noclip", 10, 50, 20, noclip ? Color.Green : Color.Red);
+            DrawText("[L] Dynamic Light", 10, 70, 20, dynamicLight ? Color.Green : Color.Red);
 
             EndDrawing();
         }
@@ -188,18 +186,18 @@ internal static class Program {
 
         // Compass 
         void DrawCompass() {
-            
-            if (!freeCamMode) return;
-            
-            var center = cam.Position; 
-            center.Y -= 1.0f; 
+
+            if (!noclip) return;
+
+            var center = cam.Position;
+            center.Y -= 1.0f;
             const float radius = 1.0f;
 
             // Draw Circle
             const int segments = 32;
-            
+
             for (var i = 0; i < segments; i++) {
-                
+
                 var a1 = (float)i / segments * Math.PI * 2;
                 var a2 = (float)(i + 1) / segments * Math.PI * 2;
                 var p1 = center + new Vector3((float)Math.Cos(a1) * radius, 0, (float)Math.Sin(a1) * radius);
@@ -227,7 +225,7 @@ internal static class Program {
             DrawLine3D(ePos + new Vector3(0, 0, -0.05f), ePos + new Vector3(0, 0, 0.05f), Color.Green);
             DrawLine3D(ePos + new Vector3(0, 0, 0), ePos + new Vector3(0.08f, 0, 0), Color.Green);
             DrawLine3D(ePos + new Vector3(0, 0, 0.05f), ePos + new Vector3(0.1f, 0, 0.05f), Color.Green);
-            
+
             // W (-X)
             var wPos = center + new Vector3(-radius, 0, 0);
             DrawLine3D(wPos + new Vector3(-0.1f, 0, -0.05f), wPos + new Vector3(-0.1f, 0, 0.05f), Color.Yellow);
