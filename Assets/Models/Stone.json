@@ -1,0 +1,6 @@
+{
+	"parent": "Models/Block",
+	"textures": {
+		"all": "Textures/Stone"
+	}
+}

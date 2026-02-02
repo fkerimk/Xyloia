@@ -1,0 +1,37 @@
+{
+    "General": {
+        "Seed": 1337,
+        "WaterLevel": 60
+    },
+    "Terrain": {
+        "Scale": 0.005,
+        "BaseHeight": 60,
+        "HeightAmplitude": 40,
+        "DetailScale": 0.03,
+        "DetailAmplitude": 10
+    },
+    "Caves": {
+        "Enabled": true,
+        "ScaleX": 0.04,
+        "ScaleY": 0.06,
+        "ScaleZ": 0.04,
+        "Threshold": 0.6
+    },
+    "Layers": [
+        {
+            "Name": "Surface",
+            "Depth": 1,
+            "Block": "Grass"
+        },
+        {
+            "Name": "SubSurface",
+            "Depth": 4,
+            "Block": "Dirt"
+        },
+        {
+            "Name": "Deep",
+            "Depth": 255,
+            "Block": "Stone"
+        }
+    ]
+}

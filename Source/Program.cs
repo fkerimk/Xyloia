@@ -1,6 +1,7 @@
 ﻿using System.Numerics;
 using Raylib_cs;
 using static Raylib_cs.Raylib;
+using Xyloia;
 
 internal static class Program {
 
@@ -15,6 +16,7 @@ internal static class Program {
         SetWindowMonitor(0);
 
         Registry.Initialize(".");
+        WorldGenConfig.Load(".");
 
         var material = LoadMaterialDefault();
         SetMaterialTexture(ref material, MaterialMapIndex.Albedo, Registry.AtlasTexture);

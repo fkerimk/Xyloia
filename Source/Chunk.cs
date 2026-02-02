@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using Raylib_cs;
 using static Raylib_cs.Raylib;
+using Xyloia;
 
 // ReSharper disable InconsistentNaming
 internal class Chunk(int x, int y, int z) : IDisposable {
@@ -107,8 +108,10 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
         if (_disposed || _blocks == null) return;
 
-        var grassId = Registry.GetId("Grass");
-        var dirtId = Registry.GetId("Dirt");
+        var config = WorldGenConfig.Data;
+        var t = config.Terrain;
+        var c = config.Caves;
+        var layers = config.Layers;
 
         LightEmitters.Clear();
 
@@ -125,8 +128,11 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                     float worldZ = Z * Depth + lz;
 
-                    var height = (int)((Noise.Perlin2D(worldX * 0.015f, worldZ * 0.015f) + 1) * 32 + 20);
-                    height += (int)((Noise.Perlin2D(worldX * 0.05f, worldZ * 0.05f)) * 8);
+                    // Improved Height Calculation - Base Continental Noise
+                    var height = (int)(t.BaseHeight + (Noise.Perlin2D(worldX * (float)t.Scale, worldZ * (float)t.Scale) + 0.1) * t.HeightAmplitude);
+
+                    // Detail / Roughness
+                    height += (int)(Noise.Perlin2D(worldX * (float)t.DetailScale, worldZ * (float)t.DetailScale) * t.DetailAmplitude);
 
                     for (var ly = 0; ly < Height; ly++) {
 
@@ -136,13 +142,30 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                         if (ly <= height) {
 
-                            blockId = (ly == height) ? grassId : dirtId;
+                            var depth = height - ly;
+                            var accDepth = 0;
 
-                            if (blockId != 0) {
+                            // Layer Logic
+                            foreach (var layer in layers) {
+                                if (depth < accDepth + layer.Depth) {
+                                    blockId = layer.BlockId;
 
+                                    break;
+                                }
+
+                                accDepth += layer.Depth;
+                            }
+
+                            // If no layer matched (ran out), use the last one (Deepest)
+                            if (blockId == 0 && layers.Count > 0) blockId = layers[^1].BlockId;
+
+                            // 3D Noise Caves
+                            if (c.Enabled && blockId != 0 && ly < height - 2) {
+
+                                // Keep top 2 layers safe from caves? Or just raw? User prefers raw usually.
                                 float worldY = Y * Height + ly;
-                                var cave = Noise.Perlin3D(worldX * 0.08f, worldY * 0.08f, worldZ * 0.08f);
-                                if (cave > 0.45f) blockId = 0;
+                                var caveVal = Noise.Perlin3D(worldX * (float)c.ScaleX, worldY * (float)c.ScaleY, worldZ * (float)c.ScaleZ);
+                                if (caveVal > c.Threshold) blockId = 0;
                             }
                         }
 
@@ -151,7 +174,6 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                         if (blockId > 0) {
 
                             var lum = Registry.GetLuminance(blockId);
-
                             if (lum.R > 0 || lum.G > 0 || lum.B > 0) LightEmitters.Add(idx);
                         }
 
