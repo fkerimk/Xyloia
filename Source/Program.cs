@@ -19,11 +19,13 @@ internal static class Program {
         var material = LoadMaterialDefault();
         SetMaterialTexture(ref material, MaterialMapIndex.Albedo, Registry.AtlasTexture);
 
-        var shader = LoadShader("Assets/Shaders/Chunk.vs", "Assets/Shaders/Chunk.fs");
+        var chunkShader = LoadShader("Assets/Shaders/Chunk.vs", "Assets/Shaders/Chunk.fs");
         
-        material.Shader = shader;
+        material.Shader = chunkShader;
         
-        var dynLightLoc = GetShaderLocation(shader, "dynLightPos");
+        var crosshairTexture = LoadTexture("Assets/Textures/Crosshair.png");
+        
+        var dynLightLoc = GetShaderLocation(chunkShader, "dynLightPos");
 
         var world = new World();
 
@@ -47,6 +49,7 @@ internal static class Program {
         var yaw = (float)Math.Atan2(initialDir.Z, initialDir.X);
 
         var freeCamVelocity = Vector3.Zero;
+        var spawned = false;
 
         DisableCursor();
 
@@ -64,9 +67,20 @@ internal static class Program {
             
             world.UpdateDynamicLight(cam.Position, dynamicLight);
 
-            SetShaderValue(shader, dynLightLoc, dynamicLight ? cam.Position : new Vector3(99999, 99999, 99999), ShaderUniformDataType.Vec3);
+            SetShaderValue(chunkShader, dynLightLoc, dynamicLight ? cam.Position : new Vector3(99999, 99999, 99999), ShaderUniformDataType.Vec3);
 
             world.Update(cam.Position);
+
+            if (!spawned && world.IsChunkLoaded(0, 0, 0)) {
+                
+                const int spawnX = Chunk.Width / 2;
+                const int spawnZ = Chunk.Depth / 2;
+                var spawnY = world.GetTopBlockHeight(spawnX, spawnZ) + 2;
+                
+                controller.Position = new Vector3(spawnX, spawnY, spawnZ);
+                controller.SetRotation(yaw, pitch);
+                spawned = true;
+            }
 
             // Toggle camera
             if (IsKeyPressed(KeyboardKey.N)) {
@@ -85,7 +99,7 @@ internal static class Program {
                 } else {
 
                     // Switch to character
-                    controller.Position = cam.Position with { Y = cam.Position.Y - 0.8f };
+                    controller.Position = cam.Position with { Y = cam.Position.Y - PlayerController.EyeHeight };
                     controller.Velocity = Vector3.Zero;
                     controller.SetRotation(yaw, pitch);
                 }
@@ -148,6 +162,15 @@ internal static class Program {
 
             interaction.DrawUi();
 
+            const float crosshairScale = 1.0f;
+            var cw = crosshairTexture.Width * crosshairScale;
+            var ch = crosshairTexture.Height * crosshairScale;
+            
+            Rlgl.SetBlendFactors(0x0307, 0x0303, 0x8006); // GL_ONE_MINUS_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA, GL_FUNC_ADD
+            Rlgl.SetBlendMode(BlendMode.Custom);
+            DrawTextureEx(crosshairTexture, new Vector2(GetScreenWidth() / 2f - cw / 2f, GetScreenHeight() / 2f - ch / 2f), 0, crosshairScale, Color.White);
+            Rlgl.SetBlendMode(BlendMode.Alpha);
+
             DrawFPS(10, 10);
             DrawText($"{controller.Position:F2}".TrimStart('<').TrimEnd('>'), 10, 30, 20, Color.Yellow);
             DrawText("[N] Free Cam", 10, 50, 20, freeCamMode ? Color.Green : Color.Red);
@@ -157,7 +180,8 @@ internal static class Program {
         }
 
         world.Unload();
-        UnloadShader(shader);
+        UnloadTexture(crosshairTexture);
+        UnloadShader(chunkShader);
         CloseWindow();
 
         return 0;

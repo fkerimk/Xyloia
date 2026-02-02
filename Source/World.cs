@@ -286,6 +286,18 @@ internal class World {
         return false;
     }
 
+    public bool IsChunkLoaded(int cx, int cy, int cz) => _chunks.ContainsKey(new ChunkPos(cx, cy, cz));
+
+    public int GetTopBlockHeight(int x, int z) {
+        
+        for (var y = Chunk.Height - 1; y >= 0; y--) {
+            
+            if (GetBlock(x, y, z).Solid) return y;
+        }
+        
+        return 0;
+    }
+
     public void SetBlock(int x, int y, int z, byte blockId) {
 
         var blockPos = new ChunkPos(x >> 4, y >> 8, z >> 4);

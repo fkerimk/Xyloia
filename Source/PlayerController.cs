@@ -9,7 +9,7 @@ internal class PlayerController(World world, Vector3 position) {
     // Player AABB dimensions
     private const float Width = 0.6f;
     private const float Height = 1.8f; 
-    private const float EyeHeight = 1.62f;
+    public const float EyeHeight = 1.62f;
 
     private const float MoveSpeed = 7.5f;
     private const float JumpForce = 10.5f; 
