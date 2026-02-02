@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Numerics;
 using Raylib_cs;
 using static Raylib_cs.Raylib;
+using Xyloia;
 
 // ReSharper disable InconsistentlySynchronizedField
 internal class World {
@@ -289,12 +290,12 @@ internal class World {
     public bool IsChunkLoaded(int cx, int cy, int cz) => _chunks.ContainsKey(new ChunkPos(cx, cy, cz));
 
     public int GetTopBlockHeight(int x, int z) {
-        
+
         for (var y = Chunk.Height - 1; y >= 0; y--) {
-            
+
             if (GetBlock(x, y, z).Solid) return y;
         }
-        
+
         return 0;
     }
 
@@ -662,14 +663,15 @@ internal class World {
                                 }
 
                                 // Block Light Initiation (Emitters)
-                                for (var lx = 0; lx < Chunk.Width; lx++)
-                                for (var ly = 0; ly < Chunk.Height; ly++)
-                                for (var lz = 0; lz < Chunk.Depth; lz++) {
+                                foreach (var ptr in chunk.LightEmitters) {
+
+                                    var ly = ptr % Chunk.Height;
+                                    var r1 = ptr / Chunk.Height;
+                                    var lz = r1 % Chunk.Depth;
+                                    var lx = r1 / Chunk.Depth;
 
                                     var b = chunk.GetBlock(lx, ly, lz);
                                     var lum = Registry.GetLuminance(b.Id);
-
-                                    if (lum is { R: 0, G: 0, B: 0 }) continue;
 
                                     var wx = pos.X * Chunk.Width + lx;
                                     var wy = ly;
@@ -679,9 +681,9 @@ internal class World {
                                     var g = (byte)(lum.G / 16);
                                     var bl = (byte)(lum.B / 16);
 
-                                    var light = GetLight(wx, wy, wz);
+                                    var light = chunk.GetLight(lx, ly, lz);
                                     light = (ushort)((light & 0xF000) | (r & 0xF) | ((g & 0xF) << 4) | ((bl & 0xF) << 8));
-                                    SetLight(wx, wy, wz, light);
+                                    chunk.SetLight(lx, ly, lz, light);
 
                                     bQ.Enqueue((wx, wy, wz));
                                 }
@@ -821,6 +823,9 @@ internal class World {
         var camDir = Vector3.Normalize(camera.Target - camera.Position);
         var camPos = camera.Position;
 
+        var aspect = (float)GetScreenWidth() / GetScreenHeight();
+        var frustum = new Frustum(camera, aspect, 0.5f, (ViewDistance + 4) * 16f);
+
         var count = _renderList.Count;
 
         if (_frameCounter++ % 30 == 0) {
@@ -842,7 +847,13 @@ internal class World {
 
             var chunk = _renderList[i];
 
-            var cx = chunk.X * Chunk.Width + Chunk.Width / 2f;
+            // Frustum Culling
+            var min = new Vector3(chunk.X * Chunk.Width, 0, chunk.Z * Chunk.Depth);
+            var max = new Vector3(min.X + Chunk.Width, Chunk.Height, min.Z + Chunk.Depth);
+
+            if (!frustum.IntersectsBox(min, max)) continue;
+
+            var cx = min.X + Chunk.Width / 2f;
             var cz = chunk.Z * Chunk.Depth + Chunk.Depth / 2f;
 
             // Find the closest point vertically within the chunk's 256-block column

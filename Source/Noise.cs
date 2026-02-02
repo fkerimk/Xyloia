@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 internal static class Noise {
 
     private static readonly int[] P = new int[512];
@@ -9,6 +11,7 @@ internal static class Noise {
         for (var i = 0; i < 256; i++) P[256 + i] = P[i] = Permutation[i];
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float Perlin3D(float x, float y, float z) {
 
         var ix = (int)Math.Floor(x) & 255;
@@ -29,9 +32,13 @@ internal static class Noise {
         return Lerp(w, Lerp(v, Lerp(u, Grad(P[aa], x, y, z), Grad(P[ba], x - 1, y, z)), Lerp(u, Grad(P[ab], x, y - 1, z), Grad(P[bb], x - 1, y - 1, z))), Lerp(v, Lerp(u, Grad(P[aa + 1], x, y, z - 1), Grad(P[ba + 1], x - 1, y, z - 1)), Lerp(u, Grad(P[ab + 1], x, y - 1, z - 1), Grad(P[bb + 1], x - 1, y - 1, z - 1))));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static float Fade(float t) => t * t * t * (t * (t * 6 - 15) + 10);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static float Lerp(float t, float a, float b) => a + t * (b - a);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static float Grad(int hash, float x, float y, float z) {
 
         var h = hash & 15;
@@ -43,5 +50,22 @@ internal static class Noise {
                 : z;
 
         return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v);
+    }
+
+    public static float Perlin2D(float x, float y) {
+
+        var ix = (int)Math.Floor(x) & 255;
+        var iy = (int)Math.Floor(y) & 255;
+
+        x -= (float)Math.Floor(x);
+        y -= (float)Math.Floor(y);
+
+        var u = Fade(x);
+        var v = Fade(y);
+
+        var a = P[ix] + iy;
+        var b = P[ix + 1] + iy;
+
+        return Lerp(v, Lerp(u, Grad(P[a], x, y, 0), Grad(P[b], x - 1, y, 0)), Lerp(u, Grad(P[a + 1], x, y - 1, 0), Grad(P[b + 1], x - 1, y - 1, 0)));
     }
 }

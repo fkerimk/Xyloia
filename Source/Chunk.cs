@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using Raylib_cs;
 using static Raylib_cs.Raylib;
 
+// ReSharper disable InconsistentNaming
 internal class Chunk(int x, int y, int z) : IDisposable {
 
     public const int Width = 16;
@@ -14,17 +15,18 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
     public readonly int X = x, Y = y, Z = z;
 
-    private readonly Block[]? _blocks = System.Buffers.ArrayPool<Block>.Shared.Rent(Volume);
-    private ushort[]? _light = System.Buffers.ArrayPool<ushort>.Shared.Rent(Volume);
     public readonly List<Mesh> Meshes = [];
+    public readonly List<int> LightEmitters = [];
 
-    private readonly Lock _lock = new();
-
+    private ushort[]? _light = System.Buffers.ArrayPool<ushort>.Shared.Rent(Volume);
     private List<List<float>>? _vLists, _nLists, _tLists;
     private List<List<byte>>? _cLists;
     private List<ushort[]>? _iLists;
 
+    private readonly Block[]? _blocks = System.Buffers.ArrayPool<Block>.Shared.Rent(Volume);
     private static readonly ThreadLocal<MeshBuilder> Builder = new(() => new MeshBuilder());
+
+    private readonly Lock _lock = new();
 
     private class MeshBuilder {
 
@@ -95,41 +97,61 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         public static void Return(List<T> list) => Queue.Enqueue(list);
     }
 
-    public void Generate() {
+    public unsafe void Generate() {
 
         if (_disposed || _blocks == null) return;
-
-        var blocks = _blocks;
 
         var grassId = Registry.GetId("Grass");
         var dirtId = Registry.GetId("Dirt");
 
-        for (var lx = 0; lx < Width; lx++)
-        for (var lz = 0; lz < Depth; lz++) {
+        LightEmitters.Clear();
 
-            float worldX = X * Width + lx;
-            float worldZ = Z * Depth + lz;
+        fixed (Block* pBlocks = _blocks) {
 
-            var height = (Noise.Perlin3D(worldX * 0.015f, 0, worldZ * 0.015f) + 1) * 32 + 20;
-            height += (Noise.Perlin3D(worldX * 0.05f, 0, worldZ * 0.05f)) * 8;
+            var ptr = pBlocks;
+            var idx = 0;
 
-            for (var ly = 0; ly < Height; ly++) {
+            for (var lx = 0; lx < Width; lx++) {
 
-                if (_disposed) return;
+                float worldX = X * Width + lx;
 
-                float worldY = Y * Height + ly;
+                for (var lz = 0; lz < Depth; lz++) {
 
-                byte blockId = 0;
+                    float worldZ = Z * Depth + lz;
 
-                if (worldY < height) {
+                    var height = (int)((Noise.Perlin2D(worldX * 0.015f, worldZ * 0.015f) + 1) * 32 + 20);
+                    height += (int)((Noise.Perlin2D(worldX * 0.05f, worldZ * 0.05f)) * 8);
 
-                    blockId = (worldY > height - 1) ? grassId : dirtId;
+                    for (var ly = 0; ly < Height; ly++) {
 
-                    var cave = Noise.Perlin3D(worldX * 0.08f, worldY * 0.08f, worldZ * 0.08f);
-                    if (cave > 0.45f) blockId = 0;
+                        if (_disposed) return;
+
+                        byte blockId = 0;
+
+                        if (ly <= height) {
+
+                            blockId = (ly == height) ? grassId : dirtId;
+
+                            if (blockId != 0) {
+
+                                float worldY = Y * Height + ly;
+                                var cave = Noise.Perlin3D(worldX * 0.08f, worldY * 0.08f, worldZ * 0.08f);
+                                if (cave > 0.45f) blockId = 0;
+                            }
+                        }
+
+                        *ptr++ = new Block(blockId);
+
+                        if (blockId > 0) {
+
+                            var lum = Registry.GetLuminance(blockId);
+
+                            if (lum.R > 0 || lum.G > 0 || lum.B > 0) LightEmitters.Add(idx);
+                        }
+
+                        idx++;
+                    }
                 }
-
-                blocks[(lx * Depth + lz) * Height + ly] = new Block(blockId);
             }
         }
 
@@ -138,9 +160,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
     public volatile bool IsDirty;
 
-    public void BuildArrays(Chunk? nx, Chunk? px, Chunk? ny, Chunk? py, Chunk? nz, Chunk? pz) {
+    public unsafe void BuildArrays(Chunk? nx, Chunk? px, Chunk? ny, Chunk? py, Chunk? nz, Chunk? pz) {
 
-        if (_disposed || _blocks == null) return;
+        if (_disposed || _blocks == null || _light == null) return;
 
         var builder = Builder.Value!;
         builder.Clear();
@@ -153,564 +175,699 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
         var blocks = _blocks;
 
-        for (var x = 0; x < Width; x++)
-        for (var z = 0; z < Depth; z++)
-        for (var y = 0; y < Height; y++) {
+        fixed (Block* pBlocks = blocks)
+        fixed (ushort* pLight = _light) {
 
-            if (_disposed) return;
+            for (var x = 0; x < Width; x++)
+            for (var z = 0; z < Depth; z++)
+            for (var y = 0; y < Height; y++) {
 
-            if (builder.VIdx > 60000) Flush(builder, newVLists, newNLists, newTLists, newCLists, newILists);
+                if (_disposed) return;
 
-            var block = blocks[(x * Depth + z) * Height + y];
+                if (builder.VIdx > 60000) Flush(builder, newVLists, newNLists, newTLists, newCLists, newILists);
 
-            if (block.Id == 0) continue;
+                var idx = (x * Depth + z) * Height + y;
 
-            if (Registry.IsSimple(block.Id) && block.Data == 0) {
+                //var block = blocks[idx];
+                var block = pBlocks[idx];
 
-                var faceLights = new ushort[4];
+                if (block.Id == 0) continue;
 
-                // North (Z-1) | Face 0
-                if (!IsOpaque(x, y, z - 1)) {
-                    
-                    var uv = Registry.GetFaceUv(block.Id, 0);
-                    FillLights(x, y, z - 1, -1, 0, 0, 0, 1, 0, faceLights);
-                    Swap(faceLights);
-                    AddFace(builder, x, y, z, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, uv, faceLights);
-                }
+                if (Registry.IsSimple(block.Id) && block.Data == 0) {
 
-                // South (Z+1) | Face 2
-                if (!IsOpaque(x, y, z + 1)) {
-                    
-                    var uv = Registry.GetFaceUv(block.Id, 2);
-                    FillLights(x, y, z + 1, 1, 0, 0, 0, 1, 0, faceLights);
-                    Swap(faceLights);
-                    AddFace(builder, x, y, z, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, uv, faceLights);
-                }
+                    var faceLights = new ushort[4];
 
-                // East (X+1) | Face 1
-                if (!IsOpaque(x + 1, y, z)) {
-                    
-                    var uv = Registry.GetFaceUv(block.Id, 1);
-                    FillLights(x + 1, y, z, 0, 0, -1, 0, 1, 0, faceLights);
-                    Swap(faceLights);
-                    AddFace(builder, x, y, z, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, uv, faceLights);
-                }
+                    // North (Z-1) | Face 0
+                    if (z > 0 ? !pBlocks[idx - Height].Opaque : !(nz != null && nz.GetBlock(x, y, 15).Opaque)) {
 
-                // West (X-1) | Face 3
-                if (!IsOpaque(x - 1, y, z)) {
-                    
-                    var uv = Registry.GetFaceUv(block.Id, 3);
-                    FillLights(x - 1, y, z, 0, 0, 1, 0, 1, 0, faceLights);
-                    Swap(faceLights);
-                    AddFace(builder, x, y, z, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, -1, 0, 0, uv, faceLights);
-                }
+                        var uv = Registry.GetFaceUv(block.Id, 0);
 
-                // Up (Y+1) | Face 4
-                if (!IsOpaque(x, y + 1, z)) {
-                    
-                    var uv = Registry.GetFaceUv(block.Id);
-                    FillLights(x, y + 1, z, 1, 0, 0, 0, 0, -1, faceLights);
-                    Swap(faceLights);
+                        // Optimized FillLights for internal blocks, fallback for edges
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254) {
 
-                    // x0=0,y1=1,z0=0 ...
-                    AddFace(builder, x, y, z, 0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 0, uv, faceLights);
-                }
+                            FillLightsSimple(idx - Height, -1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
 
-                // Down (Y-1) | Face 5
-                if (!IsOpaque(x, y - 1, z)) {
-                    
-                    var uv = Registry.GetFaceUv(block.Id, 5);
-                    FillLights(x, y - 1, z, 1, 0, 0, 0, 0, 1, faceLights);
-                    SwapPairs(faceLights);
-                    AddFace(builder, x, y, z, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, -1, 0, uv, faceLights);
-                }
+                        } else {
 
-                continue;
-            }
+                            FillLights(x, y, z - 1, -1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
+                        }
 
-            var model = Registry.GetModel(block.Id);
-
-            if (model == null) continue;
-
-            var faceLights2 = new ushort[4];
-
-            var facing = Registry.GetFacing(block.Id);
-            var data = block.Data;
-            var step = Registry.GetYawStep(block.Id);
-
-            var isRotated = facing != FacingMode.Fixed && data != 0;
-            var isAxisAligned = true;
-            var rot = Quaternion.Identity;
-
-            if (isRotated) {
-
-                switch (facing) {
-
-                    case FacingMode.Yaw: {
-
-                        var axis = Vector3.UnitY;
-                        var angle = data * (step <= 0 ? 90f : step);
-
-                        rot = Quaternion.CreateFromAxisAngle(axis, angle * (float)(Math.PI / 180.0));
-                        isAxisAligned = (angle % 90) == 0;
-
-                        break;
+                        Swap(faceLights);
+                        AddFace(builder, x, y, z, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, uv, faceLights);
                     }
 
-                    case FacingMode.Rotate: {
+                    // South (Z+1) | Face 2
+                    if (z < 15 ? !pBlocks[idx + Height].Opaque : !(pz != null && pz.GetBlock(x, y, 0).Opaque)) {
 
-                        const float angle = 90f * (float)(Math.PI / 180.0);
+                        var uv = Registry.GetFaceUv(block.Id, 2);
 
-                        rot = data switch {
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254) {
 
-                            1 => Quaternion.CreateFromAxisAngle(Vector3.UnitZ, -angle),
-                            2 => Quaternion.CreateFromAxisAngle(Vector3.UnitX, angle),
-                            _ => rot
-                        };
+                            FillLightsSimple(idx + Height, 1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
 
-                        break;
+                        } else {
+
+                            FillLights(x, y, z + 1, 1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
+                        }
+
+                        Swap(faceLights);
+                        AddFace(builder, x, y, z, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, uv, faceLights);
                     }
 
-                    case FacingMode.Fixed:
-                    default:
-                        break;
-                }
-            }
+                    // East (X+1) | Face 1
+                    if (x < 15 ? !pBlocks[idx + Depth * Height].Opaque : !(px != null && px.GetBlock(0, y, z).Opaque)) {
 
-            var worldDirs = new (int X, int Y, int Z)[6];
+                        var uv = Registry.GetFaceUv(block.Id, 1);
 
-            for (var i = 0; i < 6; i++) {
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254) {
 
-                var vec = i switch {
+                            FillLightsSimple(idx + Depth * Height, 0, 0, -1, 0, 1, 0, faceLights, pLight, pBlocks);
 
-                    0 => -Vector3.UnitZ,
-                    1 => Vector3.UnitX,
-                    2 => Vector3.UnitZ,
-                    3 => -Vector3.UnitX,
-                    4 => Vector3.UnitY,
-                    5 => -Vector3.UnitY,
-                    _ => Vector3.Zero
-                };
+                        } else {
 
-                if (isRotated) vec = Vector3.Transform(vec, rot);
-                worldDirs[i] = ((int)Math.Round(vec.X), (int)Math.Round(vec.Y), (int)Math.Round(vec.Z));
-            }
+                            FillLights(x + 1, y, z, 0, 0, -1, 0, 1, 0, faceLights, pLight, pBlocks);
+                        }
 
-            foreach (var el in model.Elements) {
-
-                // Calculate element bounds
-                float x0 = el.From[0] / 16f, y0 = el.From[1] / 16f, z0 = el.From[2] / 16f;
-                float x1 = el.To[0] / 16f, y1 = el.To[1] / 16f, z1 = el.To[2] / 16f;
-
-                if (isAxisAligned) {
-
-                    var c = new Vector3(0.5f);
-                    var pMin = new Vector3(x0, y0, z0) - c;
-                    var pMax = new Vector3(x1, y1, z1) - c;
-
-                    var corners = new[] { pMin, new Vector3(pMax.X, pMin.Y, pMin.Z), new Vector3(pMin.X, pMax.Y, pMin.Z), new Vector3(pMin.X, pMin.Y, pMax.Z), new Vector3(pMax.X, pMax.Y, pMin.Z), new Vector3(pMax.X, pMin.Y, pMax.Z), new Vector3(pMin.X, pMax.Y, pMax.Z), pMax };
-
-                    var min = new Vector3(float.MaxValue);
-                    var max = new Vector3(float.MinValue);
-
-                    for (var k = 0; k < 8; k++) {
-
-                        var t = Vector3.Transform(corners[k], rot);
-                        min = Vector3.Min(min, t);
-                        max = Vector3.Max(max, t);
+                        Swap(faceLights);
+                        AddFace(builder, x, y, z, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, uv, faceLights);
                     }
 
-                    min += c;
-                    max += c;
-                    x0 = min.X;
-                    y0 = min.Y;
-                    z0 = min.Z;
-                    x1 = max.X;
-                    y1 = max.Y;
-                    z1 = max.Z;
+                    // West (X-1) | Face 3
+                    if (x > 0 ? !pBlocks[idx - Depth * Height].Opaque : !(nx != null && nx.GetBlock(15, y, z).Opaque)) {
+
+                        var uv = Registry.GetFaceUv(block.Id, 3);
+
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254) {
+
+                            FillLightsSimple(idx - Depth * Height, 0, 0, 1, 0, 1, 0, faceLights, pLight, pBlocks);
+
+                        } else {
+
+                            FillLights(x - 1, y, z, 0, 0, 1, 0, 1, 0, faceLights, pLight, pBlocks);
+                        }
+
+                        Swap(faceLights);
+                        AddFace(builder, x, y, z, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, -1, 0, 0, uv, faceLights);
+                    }
+
+                    // Up (Y+1) | Face 4
+                    if (y < 255 ? !pBlocks[idx + 1].Opaque : !(py != null && py.GetBlock(x, 0, z).Opaque)) {
+
+                        // Assuming global height > 256 handled by py
+                        var uv = Registry.GetFaceUv(block.Id);
+
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254) {
+
+                            FillLightsSimple(idx + 1, 1, 0, 0, 0, 0, -1, faceLights, pLight, pBlocks);
+
+                        } else {
+
+                            FillLights(x, y + 1, z, 1, 0, 0, 0, 0, -1, faceLights, pLight, pBlocks);
+                        }
+
+                        Swap(faceLights);
+
+                        // x0=0,y1=1,z0=0 ...
+                        AddFace(builder, x, y, z, 0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 0, uv, faceLights);
+                    }
+
+                    // Down (Y-1) | Face 5
+                    if (y > 0 ? !pBlocks[idx - 1].Opaque : !(ny != null && ny.GetBlock(x, 255, z).Opaque)) {
+
+                        var uv = Registry.GetFaceUv(block.Id, 5);
+
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254) {
+
+                            FillLightsSimple(idx - 1, 1, 0, 0, 0, 0, 1, faceLights, pLight, pBlocks);
+
+                        } else {
+
+                            FillLights(x, y - 1, z, 1, 0, 0, 0, 0, 1, faceLights, pLight, pBlocks);
+                        }
+
+                        SwapPairs(faceLights);
+                        AddFace(builder, x, y, z, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, -1, 0, uv, faceLights);
+                    }
+
+                    continue;
                 }
 
-                if (!isRotated || isAxisAligned) {
+                var model = Registry.GetModel(block.Id);
 
-                    // Local function to resolve source face for axis-aligned rotation
-                    string GetSourceFace(Vector3 dir) {
+                if (model == null) continue;
 
-                        if (!isRotated) {
+                var faceLights2 = new ushort[4];
 
-                            if (dir == Vector3.UnitZ) return "south";
-                            if (dir == -Vector3.UnitZ) return "north";
-                            if (dir == Vector3.UnitX) return "east";
-                            if (dir == -Vector3.UnitX) return "west";
-                            if (dir == Vector3.UnitY) return "up";
-                            if (dir == -Vector3.UnitY) return "down";
+                var facing = Registry.GetFacing(block.Id);
+                var data = block.Data;
+                var step = Registry.GetYawStep(block.Id);
+
+                var isRotated = facing != FacingMode.Fixed && data != 0;
+                var isAxisAligned = true;
+                var rot = Quaternion.Identity;
+
+                if (isRotated) {
+
+                    switch (facing) {
+
+                        case FacingMode.Yaw: {
+
+                            var axis = Vector3.UnitY;
+                            var angle = data * (step <= 0 ? 90f : step);
+
+                            rot = Quaternion.CreateFromAxisAngle(axis, angle * (float)(Math.PI / 180.0));
+                            isAxisAligned = (angle % 90) == 0;
+
+                            break;
+                        }
+
+                        case FacingMode.Rotate: {
+
+                            const float angle = 90f * (float)(Math.PI / 180.0);
+
+                            rot = data switch {
+
+                                1 => Quaternion.CreateFromAxisAngle(Vector3.UnitZ, -angle),
+                                2 => Quaternion.CreateFromAxisAngle(Vector3.UnitX, angle),
+                                _ => rot
+                            };
+
+                            break;
+                        }
+
+                        case FacingMode.Fixed:
+                        default:
+                            break;
+                    }
+                }
+
+                var worldDirs = new (int X, int Y, int Z)[6];
+
+                for (var i = 0; i < 6; i++) {
+
+                    var vec = i switch {
+
+                        0 => -Vector3.UnitZ,
+                        1 => Vector3.UnitX,
+                        2 => Vector3.UnitZ,
+                        3 => -Vector3.UnitX,
+                        4 => Vector3.UnitY,
+                        5 => -Vector3.UnitY,
+                        _ => Vector3.Zero
+                    };
+
+                    if (isRotated) vec = Vector3.Transform(vec, rot);
+                    worldDirs[i] = ((int)Math.Round(vec.X), (int)Math.Round(vec.Y), (int)Math.Round(vec.Z));
+                }
+
+                foreach (var el in model.Elements) {
+
+                    // Calculate element bounds
+                    float x0 = el.From[0] / 16f, y0 = el.From[1] / 16f, z0 = el.From[2] / 16f;
+                    float x1 = el.To[0] / 16f, y1 = el.To[1] / 16f, z1 = el.To[2] / 16f;
+
+                    if (isAxisAligned) {
+
+                        var c = new Vector3(0.5f);
+                        var pMin = new Vector3(x0, y0, z0) - c;
+                        var pMax = new Vector3(x1, y1, z1) - c;
+
+                        var corners = new[] { pMin, new Vector3(pMax.X, pMin.Y, pMin.Z), new Vector3(pMin.X, pMax.Y, pMin.Z), new Vector3(pMin.X, pMin.Y, pMax.Z), new Vector3(pMax.X, pMax.Y, pMin.Z), new Vector3(pMax.X, pMin.Y, pMax.Z), new Vector3(pMin.X, pMax.Y, pMax.Z), pMax };
+
+                        var min = new Vector3(float.MaxValue);
+                        var max = new Vector3(float.MinValue);
+
+                        for (var k = 0; k < 8; k++) {
+
+                            var t = Vector3.Transform(corners[k], rot);
+                            min = Vector3.Min(min, t);
+                            max = Vector3.Max(max, t);
+                        }
+
+                        min += c;
+                        max += c;
+                        x0 = min.X;
+                        y0 = min.Y;
+                        z0 = min.Z;
+                        x1 = max.X;
+                        y1 = max.Y;
+                        z1 = max.Z;
+                    }
+
+                    if (!isRotated || isAxisAligned) {
+
+                        // Local function to resolve source face for axis-aligned rotation
+                        string GetSourceFace(Vector3 dir) {
+
+                            if (!isRotated) {
+
+                                if (dir == Vector3.UnitZ) return "south";
+                                if (dir == -Vector3.UnitZ) return "north";
+                                if (dir == Vector3.UnitX) return "east";
+                                if (dir == -Vector3.UnitX) return "west";
+                                if (dir == Vector3.UnitY) return "up";
+                                if (dir == -Vector3.UnitY) return "down";
+
+                                return "";
+                            }
+
+                            var invRot = Quaternion.Inverse(rot);
+                            var modelDir = Vector3.Transform(dir, invRot);
+
+                            if (Math.Abs(modelDir.X) > 0.9f) return modelDir.X > 0 ? "east" : "west";
+                            if (Math.Abs(modelDir.Y) > 0.9f) return modelDir.Y > 0 ? "up" : "down";
+                            if (Math.Abs(modelDir.Z) > 0.9f) return modelDir.Z > 0 ? "south" : "north";
 
                             return "";
                         }
 
-                        var invRot = Quaternion.Inverse(rot);
-                        var modelDir = Vector3.Transform(dir, invRot);
+                        if (el.Faces.TryGetValue(GetSourceFace(Vector3.UnitZ), out var fS)) {
 
-                        if (Math.Abs(modelDir.X) > 0.9f) return modelDir.X > 0 ? "east" : "west";
-                        if (Math.Abs(modelDir.Y) > 0.9f) return modelDir.Y > 0 ? "up" : "down";
-                        if (Math.Abs(modelDir.Z) > 0.9f) return modelDir.Z > 0 ? "south" : "north";
+                            // South
+                            var uv = Registry.ResolveFaceUv(model, fS);
 
-                        return "";
-                    }
+                            if (!ShouldCull(uv.CullMask, pBlocks)) {
 
-                    if (el.Faces.TryGetValue(GetSourceFace(Vector3.UnitZ), out var fS)) {
+                                FillLights(x, y, z1 >= 0.999f ? z + 1 : z, 1, 0, 0, 0, 1, 0, faceLights2, pLight, pBlocks);
+                                Swap(faceLights2);
+                                AddFace(builder, x, y, z, x0, y1, z1, x1, y1, z1, x1, y0, z1, x0, y0, z1, 0, 0, 1, uv, faceLights2);
+                            }
+                        }
 
-                        // South
-                        var uv = Registry.ResolveFaceUv(model, fS);
+                        if (el.Faces.TryGetValue(GetSourceFace(-Vector3.UnitZ), out var fN)) {
 
-                        if (!ShouldCull(uv.CullMask)) {
+                            // North
+                            var uv = Registry.ResolveFaceUv(model, fN);
 
-                            FillLights(x, y, z1 >= 0.999f ? z + 1 : z, 1, 0, 0, 0, 1, 0, faceLights2);
+                            if (!ShouldCull(uv.CullMask, pBlocks)) {
+
+                                FillLights(x, y, z0 <= 0.001f ? z - 1 : z, -1, 0, 0, 0, 1, 0, faceLights2, pLight, pBlocks);
+                                Swap(faceLights2);
+                                AddFace(builder, x, y, z, x1, y1, z0, x0, y1, z0, x0, y0, z0, x1, y0, z0, 0, 0, -1, uv, faceLights2);
+                            }
+                        }
+
+                        if (el.Faces.TryGetValue(GetSourceFace(Vector3.UnitY), out var fU)) {
+
+                            // Up
+                            var uv = Registry.ResolveFaceUv(model, fU);
+
+                            if (!ShouldCull(uv.CullMask, pBlocks)) {
+
+                                FillLights(x, y1 >= 0.999f ? y + 1 : y, z, 1, 0, 0, 0, 0, -1, faceLights2, pLight, pBlocks);
+                                Swap(faceLights2);
+                                AddFace(builder, x, y, z, x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, 0, 1, 0, uv, faceLights2);
+                            }
+                        }
+
+                        if (el.Faces.TryGetValue(GetSourceFace(-Vector3.UnitY), out var fD)) {
+
+                            // Down
+                            var uv = Registry.ResolveFaceUv(model, fD);
+
+                            if (!ShouldCull(uv.CullMask, pBlocks)) {
+
+                                FillLights(x, y0 <= 0.001f ? y - 1 : y, z, 1, 0, 0, 0, 0, 1, faceLights2, pLight, pBlocks);
+                                SwapPairs(faceLights2);
+                                AddFace(builder, x, y, z, x1, y0, z0, x0, y0, z0, x0, y0, z1, x1, y0, z1, 0, -1, 0, uv, faceLights2);
+                            }
+                        }
+
+                        if (el.Faces.TryGetValue(GetSourceFace(Vector3.UnitX), out var fE)) {
+
+                            // East
+                            var uv = Registry.ResolveFaceUv(model, fE);
+
+                            if (!ShouldCull(uv.CullMask, pBlocks)) {
+
+                                FillLights(x1 >= 0.999f ? x + 1 : x, y, z, 0, 0, -1, 0, 1, 0, faceLights2, pLight, pBlocks);
+                                Swap(faceLights2);
+                                AddFace(builder, x, y, z, x1, y1, z1, x1, y1, z0, x1, y0, z0, x1, y0, z1, 1, 0, 0, uv, faceLights2);
+                            }
+                        }
+
+                        if (el.Faces.TryGetValue(GetSourceFace(-Vector3.UnitX), out var fW)) {
+
+                            // West
+                            var uv = Registry.ResolveFaceUv(model, fW);
+
+                            if (!ShouldCull(uv.CullMask, pBlocks)) {
+
+                                FillLights(x0 <= 0.001f ? x - 1 : x, y, z, 0, 0, 1, 0, 1, 0, faceLights2, pLight, pBlocks);
+                                Swap(faceLights2);
+                                AddFace(builder, x, y, z, x0, y1, z0, x0, y1, z1, x0, y0, z1, x0, y0, z0, -1, 0, 0, uv, faceLights2);
+                            }
+                        }
+                    } else {
+
+                        // Off-axis rotation (Generic)
+                        var c = new Vector3(0.5f);
+                        var min = new Vector3(el.From[0], el.From[1], el.From[2]) / 16f;
+                        var max = new Vector3(el.To[0], el.To[1], el.To[2]) / 16f;
+                        var minRot = min - c;
+                        var maxRot = max - c;
+
+                        foreach (var kvp in el.Faces) {
+
+                            var f = kvp.Value;
+                            var faceUv = Registry.ResolveFaceUv(model, f);
+
+                            if (ShouldCull(faceUv.CullMask, pBlocks)) continue;
+
+                            Vector3 p1, p2, p3, p4;
+
+                            switch (kvp.Key) {
+
+                                case "north": // Standard: TR, TL, BL, BR
+                                    p1 = new Vector3(maxRot.X, maxRot.Y, minRot.Z);
+                                    p2 = new Vector3(minRot.X, maxRot.Y, minRot.Z);
+                                    p3 = new Vector3(minRot.X, minRot.Y, minRot.Z);
+                                    p4 = new Vector3(maxRot.X, minRot.Y, minRot.Z);
+
+                                    break;
+
+                                case "south": // Standard: TL, TR, BR, BL
+                                    p1 = new Vector3(minRot.X, maxRot.Y, maxRot.Z);
+                                    p2 = new Vector3(maxRot.X, maxRot.Y, maxRot.Z);
+                                    p3 = new Vector3(maxRot.X, minRot.Y, maxRot.Z);
+                                    p4 = new Vector3(minRot.X, minRot.Y, maxRot.Z);
+
+                                    break;
+
+                                case "east": // Standard: TL, TR, BR, BL 
+                                    p1 = new Vector3(maxRot.X, maxRot.Y, maxRot.Z);
+                                    p2 = new Vector3(maxRot.X, maxRot.Y, minRot.Z);
+                                    p3 = new Vector3(maxRot.X, minRot.Y, minRot.Z);
+                                    p4 = new Vector3(maxRot.X, minRot.Y, maxRot.Z);
+
+                                    break;
+
+                                case "west": // Standard: TR, TL, BL, BR
+                                    p1 = new Vector3(minRot.X, maxRot.Y, minRot.Z);
+                                    p2 = new Vector3(minRot.X, maxRot.Y, maxRot.Z);
+                                    p3 = new Vector3(minRot.X, minRot.Y, maxRot.Z);
+                                    p4 = new Vector3(minRot.X, minRot.Y, minRot.Z);
+
+                                    break;
+
+                                case "up": // Standard: TL, TR, BR, BL
+                                    p1 = new Vector3(minRot.X, maxRot.Y, minRot.Z);
+                                    p2 = new Vector3(maxRot.X, maxRot.Y, minRot.Z);
+                                    p3 = new Vector3(maxRot.X, maxRot.Y, maxRot.Z);
+                                    p4 = new Vector3(minRot.X, maxRot.Y, maxRot.Z);
+
+                                    break;
+
+                                case "down": // Standard: TR, TL, BL, BR
+                                    p1 = new Vector3(maxRot.X, minRot.Y, minRot.Z);
+                                    p2 = new Vector3(minRot.X, minRot.Y, minRot.Z);
+                                    p3 = new Vector3(minRot.X, minRot.Y, maxRot.Z);
+                                    p4 = new Vector3(maxRot.X, minRot.Y, maxRot.Z);
+
+                                    break;
+
+                                default: continue;
+                            }
+
+                            // Apply Rotation
+                            p1 = Vector3.Transform(p1, rot) + c;
+                            p2 = Vector3.Transform(p2, rot) + c;
+                            p3 = Vector3.Transform(p3, rot) + c;
+                            p4 = Vector3.Transform(p4, rot) + c;
+
+                            // Calculate Lighting Dimensions for AO
+                            var vR = Vector3.Normalize(p2 - p1);
+                            var vU = Vector3.Normalize(p1 - p4);
+
+                            FillLights(x, y, z, (int)Math.Round(vR.X), (int)Math.Round(vR.Y), (int)Math.Round(vR.Z), (int)Math.Round(vU.X), (int)Math.Round(vU.Y), (int)Math.Round(vU.Z), faceLights2, pLight, pBlocks);
+
+                            // Fix light-vertex mapping (BL->TL, etc.)
                             Swap(faceLights2);
-                            AddFace(builder, x, y, z, x0, y1, z1, x1, y1, z1, x1, y0, z1, x0, y0, z1, 0, 0, 1, uv, faceLights2);
+
+                            // Use AddFace to handle UV rotation and Indexing correctly
+                            AddFace(builder, x, y, z, p1.X, p1.Y, p1.Z, p2.X, p2.Y, p2.Z, p3.X, p3.Y, p3.Z, p4.X, p4.Y, p4.Z, 0, 0, 0, faceUv, faceLights2);
                         }
-                    }
-
-                    if (el.Faces.TryGetValue(GetSourceFace(-Vector3.UnitZ), out var fN)) {
-
-                        // North
-                        var uv = Registry.ResolveFaceUv(model, fN);
-
-                        if (!ShouldCull(uv.CullMask)) {
-
-                            FillLights(x, y, z0 <= 0.001f ? z - 1 : z, -1, 0, 0, 0, 1, 0, faceLights2);
-                            Swap(faceLights2);
-                            AddFace(builder, x, y, z, x1, y1, z0, x0, y1, z0, x0, y0, z0, x1, y0, z0, 0, 0, -1, uv, faceLights2);
-                        }
-                    }
-
-                    if (el.Faces.TryGetValue(GetSourceFace(Vector3.UnitY), out var fU)) {
-
-                        // Up
-                        var uv = Registry.ResolveFaceUv(model, fU);
-
-                        if (!ShouldCull(uv.CullMask)) {
-
-                            FillLights(x, y1 >= 0.999f ? y + 1 : y, z, 1, 0, 0, 0, 0, -1, faceLights2);
-                            Swap(faceLights2);
-                            AddFace(builder, x, y, z, x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, 0, 1, 0, uv, faceLights2);
-                        }
-                    }
-
-                    if (el.Faces.TryGetValue(GetSourceFace(-Vector3.UnitY), out var fD)) {
-
-                        // Down
-                        var uv = Registry.ResolveFaceUv(model, fD);
-
-                        if (!ShouldCull(uv.CullMask)) {
-
-                            FillLights(x, y0 <= 0.001f ? y - 1 : y, z, 1, 0, 0, 0, 0, 1, faceLights2);
-                            SwapPairs(faceLights2);
-                            AddFace(builder, x, y, z, x1, y0, z0, x0, y0, z0, x0, y0, z1, x1, y0, z1, 0, -1, 0, uv, faceLights2);
-                        }
-                    }
-
-                    if (el.Faces.TryGetValue(GetSourceFace(Vector3.UnitX), out var fE)) {
-
-                        // East
-                        var uv = Registry.ResolveFaceUv(model, fE);
-
-                        if (!ShouldCull(uv.CullMask)) {
-
-                            FillLights(x1 >= 0.999f ? x + 1 : x, y, z, 0, 0, -1, 0, 1, 0, faceLights2);
-                            Swap(faceLights2);
-                            AddFace(builder, x, y, z, x1, y1, z1, x1, y1, z0, x1, y0, z0, x1, y0, z1, 1, 0, 0, uv, faceLights2);
-                        }
-                    }
-
-                    if (el.Faces.TryGetValue(GetSourceFace(-Vector3.UnitX), out var fW)) {
-
-                        // West
-                        var uv = Registry.ResolveFaceUv(model, fW);
-
-                        if (!ShouldCull(uv.CullMask)) {
-
-                            FillLights(x0 <= 0.001f ? x - 1 : x, y, z, 0, 0, 1, 0, 1, 0, faceLights2);
-                            Swap(faceLights2);
-                            AddFace(builder, x, y, z, x0, y1, z0, x0, y1, z1, x0, y0, z1, x0, y0, z0, -1, 0, 0, uv, faceLights2);
-                        }
-                    }
-                } else {
-
-                    // Off-axis rotation (Generic)
-                    var c = new Vector3(0.5f);
-                    var min = new Vector3(el.From[0], el.From[1], el.From[2]) / 16f;
-                    var max = new Vector3(el.To[0], el.To[1], el.To[2]) / 16f;
-                    var minRot = min - c;
-                    var maxRot = max - c;
-
-                    foreach (var kvp in el.Faces) {
-
-                        var f = kvp.Value;
-                        var faceUv = Registry.ResolveFaceUv(model, f);
-
-                        if (ShouldCull(faceUv.CullMask)) continue;
-
-                        Vector3 p1, p2, p3, p4;
-
-                        switch (kvp.Key) {
-
-                            case "north": // Standard: TR, TL, BL, BR
-                                p1 = new Vector3(maxRot.X, maxRot.Y, minRot.Z);
-                                p2 = new Vector3(minRot.X, maxRot.Y, minRot.Z);
-                                p3 = new Vector3(minRot.X, minRot.Y, minRot.Z);
-                                p4 = new Vector3(maxRot.X, minRot.Y, minRot.Z);
-
-                                break;
-
-                            case "south": // Standard: TL, TR, BR, BL
-                                p1 = new Vector3(minRot.X, maxRot.Y, maxRot.Z);
-                                p2 = new Vector3(maxRot.X, maxRot.Y, maxRot.Z);
-                                p3 = new Vector3(maxRot.X, minRot.Y, maxRot.Z);
-                                p4 = new Vector3(minRot.X, minRot.Y, maxRot.Z);
-
-                                break;
-
-                            case "east": // Standard: TL, TR, BR, BL 
-                                p1 = new Vector3(maxRot.X, maxRot.Y, maxRot.Z);
-                                p2 = new Vector3(maxRot.X, maxRot.Y, minRot.Z);
-                                p3 = new Vector3(maxRot.X, minRot.Y, minRot.Z);
-                                p4 = new Vector3(maxRot.X, minRot.Y, maxRot.Z);
-
-                                break;
-
-                            case "west": // Standard: TR, TL, BL, BR
-                                p1 = new Vector3(minRot.X, maxRot.Y, minRot.Z);
-                                p2 = new Vector3(minRot.X, maxRot.Y, maxRot.Z);
-                                p3 = new Vector3(minRot.X, minRot.Y, maxRot.Z);
-                                p4 = new Vector3(minRot.X, minRot.Y, minRot.Z);
-
-                                break;
-
-                            case "up": // Standard: TL, TR, BR, BL
-                                p1 = new Vector3(minRot.X, maxRot.Y, minRot.Z);
-                                p2 = new Vector3(maxRot.X, maxRot.Y, minRot.Z);
-                                p3 = new Vector3(maxRot.X, maxRot.Y, maxRot.Z);
-                                p4 = new Vector3(minRot.X, maxRot.Y, maxRot.Z);
-
-                                break;
-
-                            case "down": // Standard: TR, TL, BL, BR
-                                p1 = new Vector3(maxRot.X, minRot.Y, minRot.Z);
-                                p2 = new Vector3(minRot.X, minRot.Y, minRot.Z);
-                                p3 = new Vector3(minRot.X, minRot.Y, maxRot.Z);
-                                p4 = new Vector3(maxRot.X, minRot.Y, maxRot.Z);
-
-                                break;
-
-                            default: continue;
-                        }
-
-                        // Apply Rotation
-                        p1 = Vector3.Transform(p1, rot) + c;
-                        p2 = Vector3.Transform(p2, rot) + c;
-                        p3 = Vector3.Transform(p3, rot) + c;
-                        p4 = Vector3.Transform(p4, rot) + c;
-
-                        // Calculate Lighting Dimensions for AO
-                        var vR = Vector3.Normalize(p2 - p1);
-                        var vU = Vector3.Normalize(p1 - p4);
-
-                        FillLights(x, y, z, (int)Math.Round(vR.X), (int)Math.Round(vR.Y), (int)Math.Round(vR.Z), (int)Math.Round(vU.X), (int)Math.Round(vU.Y), (int)Math.Round(vU.Z), faceLights2);
-
-                        // Fix light-vertex mapping (BL->TL, etc.)
-                        Swap(faceLights2);
-
-                        // Use AddFace to handle UV rotation and Indexing correctly
-                        AddFace(builder, x, y, z, p1.X, p1.Y, p1.Z, p2.X, p2.Y, p2.Z, p3.X, p3.Y, p3.Z, p4.X, p4.Y, p4.Z, 0, 0, 0, faceUv, faceLights2);
                     }
                 }
-            }
 
-            continue;
+                continue;
 
-            bool ShouldCull(byte mask) {
+                bool ShouldCull(byte mask, Block* pB) {
 
-                if (mask == 0) return false;
+                    if (mask == 0) return false;
 
-                for (var i = 0; i < 6; i++) {
+                    for (var i = 0; i < 6; i++) {
 
-                    if ((mask & (1 << i)) == 0) continue;
+                        if ((mask & (1 << i)) == 0) continue;
 
-                    var d = worldDirs[i];
+                        var d = worldDirs[i];
 
-                    if (!IsOpaque(x + d.X, y + d.Y, z + d.Z)) return false;
-                }
-
-                return true;
-            }
-
-            void Swap(ushort[] arr) {
-
-                (arr[0], arr[3]) = (arr[3], arr[0]);
-                (arr[1], arr[2]) = (arr[2], arr[1]);
-            }
-
-            void SwapPairs(ushort[] arr) {
-
-                (arr[0], arr[1]) = (arr[1], arr[0]);
-                (arr[2], arr[3]) = (arr[3], arr[2]);
-            }
-
-            void FillLights(int lx, int ly, int lz, int rX, int rY, int rZ, int uX, int uY, int uZ, ushort[] output) {
-
-                if (!QualitySettings.SmoothLighting) {
-
-                    var flat = GetLightSafe(lx, ly, lz);
-                    output[0] = output[1] = output[2] = output[3] = flat;
-
-                    return;
-                }
-
-                // output[0]=BL, output[1]=BR, output[2]=TR, output[3]=TL
-                output[0] = GetVertexLight(lx, ly, lz, -rX - uX, -rY - uY, -rZ - uZ);
-                output[1] = GetVertexLight(lx, ly, lz, rX - uX, rY - uY, rZ - uZ);
-                output[2] = GetVertexLight(lx, ly, lz, rX + uX, rY + uY, rZ + uZ);
-                output[3] = GetVertexLight(lx, ly, lz, -rX + uX, -rY + uY, -rZ + uZ);
-            }
-
-            ushort GetVertexLight(int vx, int vy, int vz, int dx, int dy, int dz) {
-
-                var l1 = GetLightSafe(vx, vy, vz);
-
-                int ax, ay, az, bx, by, bz, cx, cy, cz;
-
-                if (dx == 0) {
-                    ax = vx;
-                    ay = vy + dy;
-                    az = vz;
-                    bx = vx;
-                    by = vy;
-                    bz = vz + dz;
-                    cx = vx;
-                    cy = vy + dy;
-                    cz = vz + dz;
-                } else if (dy == 0) {
-                    ax = vx + dx;
-                    ay = vy;
-                    az = vz;
-                    bx = vx;
-                    by = vy;
-                    bz = vz + dz;
-                    cx = vx + dx;
-                    cy = vy;
-                    cz = vz + dz;
-                } else {
-                    ax = vx + dx;
-                    ay = vy;
-                    az = vz;
-                    bx = vx;
-                    by = vy + dy;
-                    bz = vz;
-                    cx = vx + dx;
-                    cy = vy + dy;
-                    cz = vz;
-                }
-
-                var lA = GetLightSafe(ax, ay, az);
-                var lB = GetLightSafe(bx, by, bz);
-
-                // Occlusion
-                if (IsSolid(ax, ay, az) && IsSolid(bx, by, bz)) {
-
-                    return AverageLight(l1, lA, lB, l1);
-                }
-
-                var lC = GetLightSafe(cx, cy, cz);
-
-                return AverageLight(l1, lA, lB, lC);
-            }
-
-            ushort AverageLight(ushort a, ushort b, ushort c, ushort d) {
-
-                var r = (a & 0xF) + (b & 0xF) + (c & 0xF) + (d & 0xF);
-                var g = ((a >> 4) & 0xF) + ((b >> 4) & 0xF) + ((c >> 4) & 0xF) + ((d >> 4) & 0xF);
-                var bl = ((a >> 8) & 0xF) + ((b >> 8) & 0xF) + ((c >> 8) & 0xF) + ((d >> 8) & 0xF);
-                var s = ((a >> 12) & 0xF) + ((b >> 12) & 0xF) + ((c >> 12) & 0xF) + ((d >> 12) & 0xF);
-
-                return (ushort)(((r + 2) >> 2) | (((g + 2) >> 2) << 4) | (((bl + 2) >> 2) << 8) | (((s + 2) >> 2) << 12));
-            }
-
-            ushort GetLightSafe(int cx, int cy, int cz) {
-
-                if (cx is >= 0 and < Width && cy is >= 0 and < Height && cz is >= 0 and < Depth) return _light![(cx * Depth + cz) * Height + cy];
-
-                return cy switch {
-
-                    >= Height => 0xF000,
-                    < 0       => 0,
-
-                    _ => cx switch {
-
-                        < 0      => nx?.GetLight(cx + Width, cy, cz) ?? 0,
-                        >= Width => px?.GetLight(cx - Width, cy, cz) ?? 0,
-
-                        _ => cz switch {
-
-                            < 0      => nz?.GetLight(cx, cy, cz + Depth) ?? 0,
-                            >= Depth => pz?.GetLight(cx, cy, cz - Depth) ?? 0,
-                            _        => 0
-                        }
+                        if (!IsOpaque(x + d.X, y + d.Y, z + d.Z, pB)) return false;
                     }
-                };
 
-            }
-
-            Block GetBlockSafe(int cx, int cy, int cz) {
-
-                if (_disposed) return new Block();
-
-                return cx switch {
-
-                    >= 0 and < Width when cy is >= 0 and < Height && cz is >= 0 and < Depth => blocks[(cx * Depth + cz) * Height + cy],
-                    < 0                                                                     => nx?.GetBlock(cx + Width, cy, cz) ?? new Block(),
-                    >= Width                                                                => px?.GetBlock(cx - Width, cy, cz) ?? new Block(),
-
-                    _ => cy switch {
-
-                        < 0       => ny?.GetBlock(cx, Height - 1, cz) ?? new Block(),
-                        >= Height => py?.GetBlock(cx, 0, cz) ?? new Block(),
-
-                        _ => cz switch {
-
-                            < 0      => nz?.GetBlock(cx, cy, cz + Depth) ?? new Block(),
-                            >= Depth => pz?.GetBlock(cx, cy, 0) ?? new Block(),
-                            _        => new Block()
-                        }
-                    }
-                };
-
-            }
-
-            bool IsOpaque(int cx, int cy, int cz) {
-
-                var b = GetBlockSafe(cx, cy, cz);
-
-                if (b.Opaque) return true;
-                if (b.Id == 0) return false;
-
-                // Connection-based culling
-                if (Registry.CanConnect(block.Id, b.Id)) return true;
-
-                // Smart culling for transparent blocks. 
-                // 1. Only allow if the neighbor contains a model element that covers the full volume.
-                if (!Registry.IsFullBlock(b.Id)) return false;
-
-                // 2. Clump-aware surrounded check.
-                bool IsOpaqueNb(int xOffset, int yOffset, int zOffset) {
-                    var nb = GetBlockSafe(cx + xOffset, cy + yOffset, cz + zOffset);
-
-                    return nb.Opaque || Registry.CanConnect(b.Id, nb.Id);
+                    return true;
                 }
 
-                return IsOpaqueNb(1, 0, 0) && IsOpaqueNb(-1, 0, 0) && IsOpaqueNb(0, 1, 0) && IsOpaqueNb(0, -1, 0) && IsOpaqueNb(0, 0, 1) && IsOpaqueNb(0, 0, -1);
-            }
+                void Swap(ushort[] arr) {
 
-            bool IsSolid(int cx, int cy, int cz) => GetBlockSafe(cx, cy, cz).Solid;
+                    (arr[0], arr[3]) = (arr[3], arr[0]);
+                    (arr[1], arr[2]) = (arr[2], arr[1]);
+                }
+
+                void SwapPairs(ushort[] arr) {
+
+                    (arr[0], arr[1]) = (arr[1], arr[0]);
+                    (arr[2], arr[3]) = (arr[3], arr[2]);
+                }
+
+                // Fast unsafe version
+                void FillLightsSimple(int idX, int rX, int rY, int rZ, int uX, int uY, int uZ, ushort[] output, ushort* pL, Block* pB) {
+
+                    if (!QualitySettings.SmoothLighting) {
+                        var flat = pL[idX];
+                        output[0] = output[1] = output[2] = output[3] = flat;
+
+                        return;
+                    }
+
+                    // Assuming internal check is done by caller
+                    output[0] = GetVertexLightPtr(idX, -rX - uX, -rY - uY, -rZ - uZ, pL, pB);
+                    output[1] = GetVertexLightPtr(idX, rX - uX, rY - uY, rZ - uZ, pL, pB);
+                    output[2] = GetVertexLightPtr(idX, rX + uX, rY + uY, rZ + uZ, pL, pB);
+                    output[3] = GetVertexLightPtr(idX, -rX + uX, -rY + uY, -rZ + uZ, pL, pB);
+                }
+
+                ushort GetVertexLightPtr(int centerIdx, int dx, int dy, int dz, ushort* pL, Block* pB) {
+
+                    // Center
+                    var l1 = pL[centerIdx];
+
+                    // A, B, C Logic
+                    int idxA = centerIdx, idxB = centerIdx, idxC = centerIdx;
+
+                    const int xStep = Depth * Height;
+
+                    // Optimized offset calculation
+                    if (dx == 0) {
+
+                        // Axis A: Y+dy (idx + dy*yStep), Axis B: Z+dz (idx + dz*zStep) A = Y+dy, B = Z+dz, Y+dy + Z+dz
+                        var offZ = dz * Height;
+
+                        idxA += dy;
+                        idxB += offZ;
+                        idxC += dy + offZ;
+
+                    } else if (dy == 0) {
+
+                        // A = X+dx, B = Z+dz
+                        var offX = dx * xStep;
+                        var offZ = dz * Height;
+
+                        idxA += offX;
+                        idxB += offZ;
+                        idxC += offX + offZ;
+
+                    } else {
+
+                        // A = X+dx, B = Y+dy
+                        var offX = dx * xStep;
+
+                        idxA += offX;
+                        idxB += dy;
+                        idxC += offX + dy;
+                    }
+
+                    var lA = pL[idxA];
+                    var lB = pL[idxB];
+
+                    if (pB[idxA].Solid && pB[idxB].Solid) return AverageLight(l1, lA, lB, l1);
+
+                    var lC = pL[idxC];
+
+                    return AverageLight(l1, lA, lB, lC);
+                }
+
+                void FillLights(int lx, int ly, int lz, int rX, int rY, int rZ, int uX, int uY, int uZ, ushort[] output, ushort* pL, Block* pB) {
+
+                    if (!QualitySettings.SmoothLighting) {
+
+                        var flat = GetLightSafe(lx, ly, lz, pL);
+                        output[0] = output[1] = output[2] = output[3] = flat;
+
+                        return;
+                    }
+
+                    // output[0]=BL, output[1]=BR, output[2]=TR, output[3]=TL
+                    output[0] = GetVertexLight(lx, ly, lz, -rX - uX, -rY - uY, -rZ - uZ, pL, pB);
+                    output[1] = GetVertexLight(lx, ly, lz, rX - uX, rY - uY, rZ - uZ, pL, pB);
+                    output[2] = GetVertexLight(lx, ly, lz, rX + uX, rY + uY, rZ + uZ, pL, pB);
+                    output[3] = GetVertexLight(lx, ly, lz, -rX + uX, -rY + uY, -rZ + uZ, pL, pB);
+                }
+
+                ushort GetVertexLight(int vx, int vy, int vz, int dx, int dy, int dz, ushort* pL, Block* pB) {
+
+                    var l1 = GetLightSafe(vx, vy, vz, pL);
+
+                    int ax, ay, az, bx, by, bz, cx, cy, cz;
+
+                    if (dx == 0) {
+
+                        ax = vx;
+                        ay = vy + dy;
+                        az = vz;
+                        bx = vx;
+                        by = vy;
+                        bz = vz + dz;
+                        cx = vx;
+                        cy = vy + dy;
+                        cz = vz + dz;
+
+                    } else if (dy == 0) {
+
+                        ax = vx + dx;
+                        ay = vy;
+                        az = vz;
+                        bx = vx;
+                        by = vy;
+                        bz = vz + dz;
+                        cx = vx + dx;
+                        cy = vy;
+                        cz = vz + dz;
+
+                    } else {
+
+                        ax = vx + dx;
+                        ay = vy;
+                        az = vz;
+                        bx = vx;
+                        by = vy + dy;
+                        bz = vz;
+                        cx = vx + dx;
+                        cy = vy + dy;
+                        cz = vz;
+                    }
+
+                    var lA = GetLightSafe(ax, ay, az, pL);
+                    var lB = GetLightSafe(bx, by, bz, pL);
+
+                    // Occlusion
+                    if (IsSolid(ax, ay, az, pB) && IsSolid(bx, by, bz, pB)) {
+
+                        return AverageLight(l1, lA, lB, l1);
+                    }
+
+                    var lC = GetLightSafe(cx, cy, cz, pL);
+
+                    return AverageLight(l1, lA, lB, lC);
+                }
+
+                ushort AverageLight(ushort a, ushort b, ushort c, ushort d) {
+
+                    var r = (a & 0xF) + (b & 0xF) + (c & 0xF) + (d & 0xF);
+                    var g = ((a >> 4) & 0xF) + ((b >> 4) & 0xF) + ((c >> 4) & 0xF) + ((d >> 4) & 0xF);
+                    var bl = ((a >> 8) & 0xF) + ((b >> 8) & 0xF) + ((c >> 8) & 0xF) + ((d >> 8) & 0xF);
+                    var s = ((a >> 12) & 0xF) + ((b >> 12) & 0xF) + ((c >> 12) & 0xF) + ((d >> 12) & 0xF);
+
+                    return (ushort)(((r + 2) >> 2) | (((g + 2) >> 2) << 4) | (((bl + 2) >> 2) << 8) | (((s + 2) >> 2) << 12));
+                }
+
+                ushort GetLightSafe(int cx, int cy, int cz, ushort* pL) {
+
+                    if (cx is >= 0 and < Width && cy is >= 0 and < Height && cz is >= 0 and < Depth) return pL[(cx * Depth + cz) * Height + cy];
+
+                    return cy switch {
+
+                        >= Height => 0xF000,
+                        < 0       => 0,
+
+                        _ => cx switch {
+
+                            < 0      => nx?.GetLight(cx + Width, cy, cz) ?? 0,
+                            >= Width => px?.GetLight(cx - Width, cy, cz) ?? 0,
+
+                            _ => cz switch {
+
+                                < 0      => nz?.GetLight(cx, cy, cz + Depth) ?? 0,
+                                >= Depth => pz?.GetLight(cx, cy, cz - Depth) ?? 0,
+                                _        => 0
+                            }
+                        }
+                    };
+
+                }
+
+                Block GetBlockSafe(int cx, int cy, int cz, Block* pB) {
+
+                    if (_disposed) return new Block();
+
+                    return cx switch {
+
+                        >= 0 and < Width when cy is >= 0 and < Height && cz is >= 0 and < Depth => pB[(cx * Depth + cz) * Height + cy],
+                        < 0                                                                     => nx?.GetBlock(cx + Width, cy, cz) ?? new Block(),
+                        >= Width                                                                => px?.GetBlock(cx - Width, cy, cz) ?? new Block(),
+
+                        _ => cy switch {
+
+                            < 0       => ny?.GetBlock(cx, Height - 1, cz) ?? new Block(),
+                            >= Height => py?.GetBlock(cx, 0, cz) ?? new Block(),
+
+                            _ => cz switch {
+
+                                < 0      => nz?.GetBlock(cx, cy, cz + Depth) ?? new Block(),
+                                >= Depth => pz?.GetBlock(cx, cy, 0) ?? new Block(),
+                                _        => new Block()
+                            }
+                        }
+                    };
+
+                }
+
+                bool IsOpaque(int cx, int cy, int cz, Block* pB) {
+
+                    var b = GetBlockSafe(cx, cy, cz, pB);
+
+                    if (b.Opaque) return true;
+                    if (b.Id == 0) return false;
+
+                    // Connection-based culling
+                    if (Registry.CanConnect(block.Id, b.Id)) return true;
+                    
+                    // Only allow if the neighbor contains a model element that covers the full volume.
+                    if (!Registry.IsFullBlock(b.Id)) return false;
+
+                    return IsOpaqueNb(1, 0, 0) && IsOpaqueNb(-1, 0, 0) && IsOpaqueNb(0, 1, 0) && IsOpaqueNb(0, -1, 0) && IsOpaqueNb(0, 0, 1) && IsOpaqueNb(0, 0, -1);
+
+                    // Clump-aware surrounded check.
+                    bool IsOpaqueNb(int xOffset, int yOffset, int zOffset) {
+                        
+                        var nb = GetBlockSafe(cx + xOffset, cy + yOffset, cz + zOffset, pB);
+
+                        return nb.Opaque || Registry.CanConnect(b.Id, nb.Id);
+                    }
+                }
+
+                bool IsSolid(int cx, int cy, int cz, Block* pB) => GetBlockSafe(cx, cy, cz, pB).Solid;
+            }
         }
 
         Flush(builder, newVLists, newNLists, newTLists, newCLists, newILists);
