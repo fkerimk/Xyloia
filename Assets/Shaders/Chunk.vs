@@ -10,7 +10,7 @@ in vec4 vertexColor; // Packed light data: R=Low byte, G=High byte (normalized 0
 uniform mat4 mvp;
 uniform mat4 matModel;
 
-uniform vec3 dynLightPos;
+
 uniform float animTime;
 uniform float unloadTimer;
 
@@ -49,70 +49,15 @@ void main() {
     // Calculate World Position
     vec4 worldPos = matModel * vec4(vertexPosition, 1.0);
     
-    // Smooth lighting
-    float dist = distance(worldPos.xyz, dynLightPos);
-    
-    float smoothLight = max(0.0, 15.0 - dist);
-
-    if (smoothLight > 0.0) {
-        
-        // Unpack Voxel Colors (0..15 range) from the vertex attribute
-        float vR = float(r);
-        float vG = float(g);
-        float vB = float(b);
-
-        // Torch Color Ratios (R=15, G=13, B=10)
-        float ratioR = 1.0;
-        float ratioG = 13.0 / 15.0;
-        float ratioB = 10.0 / 15.0;
-
-        // Calculate theoretical Smooth R, G, B
-        float sR = smoothLight * ratioR;
-        float sG = smoothLight * ratioG;
-        float sB = smoothLight * ratioB;
-
-        float tolerance = 2.5;
-
-        float newR = min(sR, vR + tolerance);
-        float newG = min(sG, vG + tolerance);
-        float newB = min(sB, vB + tolerance);
-        
-        // Just for safe keeping if needed downstream, but we will use newR
-        r = int(newR); 
-        
-        vR = newR;
-        vG = newG;
-        vB = newB;
-    }
-
-    // Convert Light Levels to Color Factors (0.0 to 1.0) - from Chunk.cs: AddFace
-    float finalR = (smoothLight > 0.0) ? min(smoothLight, float(r) + 2.5) : float(r); 
-
     float fR = float(r);
     float fG = float(g);
     float fB = float(b);
-    
-    if (smoothLight > 0.0) {
-        float ratioR = 1.0;
-        float ratioG = 13.0 / 15.0;
-        float ratioB = 10.0 / 15.0;
-        
-        float sR = smoothLight * ratioR;
-        float sG = smoothLight * ratioG;
-        float sB = smoothLight * ratioB;
-        
-        // Increased tolerance to prevent clamping flicker when voxel lags
-        float tolerance = 2.0; 
-        
-        fR = min(sR, fR + tolerance);
-        fG = min(sG, fG + tolerance);
-        fB = min(sB, fB + tolerance);
-    }
+    float fS = float(s);
 
     float rlf = pow(0.85, 15.0 - fR);
     float glf = pow(0.85, 15.0 - fG);
     float blf = pow(0.85, 15.0 - fB);
-    float slf = pow(0.85, 15.0 - float(s));
+    float slf = pow(0.85, 15.0 - fS);
 
     // Combine with Sky Light (s)
     float cr = max(rlf, slf);

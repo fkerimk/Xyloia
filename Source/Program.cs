@@ -27,8 +27,6 @@ internal static class Program {
 
         var crosshairTexture = LoadTexture("Assets/Textures/Crosshair.png");
 
-        var dynLightLoc = GetShaderLocation(chunkShader, "dynLightPos");
-
         var world = new World();
 
         var cam = new Camera3D {
@@ -61,12 +59,9 @@ internal static class Program {
 
             if (!noclip) controller.FrameUpdate(dt);
 
-            // Dynamic Light Toggle
             if (IsKeyPressed(KeyboardKey.L)) dynamicLight = !dynamicLight;
 
-            world.UpdateDynamicLight(cam.Position, dynamicLight);
-
-            SetShaderValue(chunkShader, dynLightLoc, dynamicLight ? cam.Position : new Vector3(99999, 99999, 99999), ShaderUniformDataType.Vec3);
+            world.UpdatePlayerLight(cam.Position, dynamicLight);
 
             world.Update(cam.Position);
 

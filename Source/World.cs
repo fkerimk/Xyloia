@@ -13,8 +13,7 @@ internal class World {
 
     private readonly HashSet<ChunkPos> _processingChunks = [];
     private volatile int _activeTaskCount;
-
-    private Vector3? _dynamicLightPos;
+    private Vector3? _lastPlayerLightPos;
 
     private const int ViewDistance = 16;
 
@@ -287,6 +286,98 @@ internal class World {
         return false;
     }
 
+    public void UpdatePlayerLight(Vector3 position, bool enabled) {
+
+        if (!enabled) {
+
+            if (_lastPlayerLightPos == null) return;
+
+            var ox = (int)Math.Floor(_lastPlayerLightPos.Value.X);
+            var oy = (int)Math.Floor(_lastPlayerLightPos.Value.Y);
+            var oz = (int)Math.Floor(_lastPlayerLightPos.Value.Z);
+
+            CleanupLight(ox, oy, oz);
+            _lastPlayerLightPos = null;
+
+            return;
+        }
+
+        var lx = (int)Math.Floor(position.X);
+        var ly = (int)Math.Floor(position.Y);
+        var lz = (int)Math.Floor(position.Z);
+
+        if (_lastPlayerLightPos != null) {
+
+            var ox = (int)Math.Floor(_lastPlayerLightPos.Value.X);
+            var oy = (int)Math.Floor(_lastPlayerLightPos.Value.Y);
+            var oz = (int)Math.Floor(_lastPlayerLightPos.Value.Z);
+
+            if (ox == lx && oy == ly && oz == lz) return;
+
+            CleanupLight(ox, oy, oz);
+        }
+
+        _lastPlayerLightPos = position;
+
+        var car = GetBlock(lx, ly, lz);
+
+        if (car.Solid) return; // Don't light up inside solid blocks
+
+        // Add Light (Torch Color: 15, 13, 10)
+        var cur = GetLight(lx, ly, lz);
+
+        byte tr = 15;
+        byte tg = 13;
+        byte tb = 10;
+
+        var r = (byte)(cur & 0xF);
+        var g = (byte)((cur >> 4) & 0xF);
+        var b = (byte)((cur >> 8) & 0xF);
+
+        if (tr <= r && tg <= g && tb <= b) return;
+
+        var nr = Math.Max(r, tr);
+        var ng = Math.Max(g, tg);
+        var nb = Math.Max(b, tb);
+
+        var newVal = (ushort)(nr | (ng << 4) | (nb << 8) | (cur & 0xF000));
+        SetLight(lx, ly, lz, newVal);
+
+        var q = new Queue<(int, int, int)>();
+        q.Enqueue((lx, ly, lz));
+        PropagateLights(q, new Queue<(int, int, int)>());
+    }
+
+    private void CleanupLight(int x, int y, int z) {
+
+        // Remove the light previously added
+        RemoveLight(x, y, z, true);
+
+        // If the block is naturally an emitter, must restore it manually because RemoveLight extinguishes the source
+        var block = GetBlock(x, y, z);
+        var lum = Registry.GetLuminance(block.Id);
+
+        if (lum is { R: <= 0, G: <= 0, B: <= 0 }) return;
+
+        var r = (byte)(lum.R / 16);
+        var g = (byte)(lum.G / 16);
+        var b = (byte)(lum.B / 16);
+
+        // Merge with current state (which was just darkened/refilled by neighbors)
+        var cur = GetLight(x, y, z);
+
+        var nr = Math.Max((byte)(cur & 0xF), r);
+        var ng = Math.Max((byte)((cur >> 4) & 0xF), g);
+        var nb = Math.Max((byte)((cur >> 8) & 0xF), b);
+
+        var newVal = (ushort)(nr | (ng << 4) | (nb << 8) | (cur & 0xF000));
+        SetLight(x, y, z, newVal);
+
+        var q = new Queue<(int, int, int)>();
+        q.Enqueue((x, y, z));
+        PropagateLights(q, new Queue<(int, int, int)>());
+    }
+
     public bool IsChunkLoaded(int cx, int cy, int cz) => _chunks.ContainsKey(new ChunkPos(cx, cy, cz));
 
     public int GetTopBlockHeight(int x, int z) {
@@ -390,22 +481,21 @@ internal class World {
 
         RebuildChunk(chunk);
 
-        switch (lx) {
+        if (lx == 0) RebuildChunkAt(cx - 1, cy, cz);
+        if (lx == 15) RebuildChunkAt(cx + 1, cy, cz);
+        if (lz == 0) RebuildChunkAt(cx, cy, cz - 1);
+        if (lz == 15) RebuildChunkAt(cx, cy, cz + 1);
 
-            case 0:  RebuildChunkAt(cx - 1, cy, cz); break;
-            case 15: RebuildChunkAt(cx + 1, cy, cz); break;
-        }
+        // Diagonals
+        if (lx == 0 && lz == 0) RebuildChunkAt(cx - 1, cy, cz - 1);
+        if (lx == 0 && lz == 15) RebuildChunkAt(cx - 1, cy, cz + 1);
+        if (lx == 15 && lz == 0) RebuildChunkAt(cx + 1, cy, cz - 1);
+        if (lx == 15 && lz == 15) RebuildChunkAt(cx + 1, cy, cz + 1);
 
         switch (ly) {
 
             case 0:   RebuildChunkAt(cx, cy - 1, cz); break;
             case 255: RebuildChunkAt(cx, cy + 1, cz); break;
-        }
-
-        switch (lz) {
-
-            case 0:  RebuildChunkAt(cx, cy, cz - 1); break;
-            case 15: RebuildChunkAt(cx, cy, cz + 1); break;
         }
     }
 
@@ -424,7 +514,13 @@ internal class World {
                 var nz = GetChunk(chunk.X, chunk.Y, chunk.Z - 1);
                 var pz = GetChunk(chunk.X, chunk.Y, chunk.Z + 1);
 
-                chunk.BuildArrays(nx, px, ny, py, nz, pz);
+                // Diagonals
+                var nxNz = GetChunk(chunk.X - 1, chunk.Y, chunk.Z - 1);
+                var nxPz = GetChunk(chunk.X - 1, chunk.Y, chunk.Z + 1);
+                var pxNz = GetChunk(chunk.X + 1, chunk.Y, chunk.Z - 1);
+                var pxPz = GetChunk(chunk.X + 1, chunk.Y, chunk.Z + 1);
+
+                chunk.BuildArrays(nx, px, ny, py, nz, pz, nxNz, nxPz, pxNz, pxPz);
                 _buildQueue.Enqueue(chunk);
             }
         );
@@ -520,66 +616,6 @@ internal class World {
         }
 
         return new RaycastResult { Hit = false };
-    }
-
-    public void UpdateDynamicLight(Vector3 camPos, bool enabled) {
-
-        var lx = (int)Math.Floor(camPos.X);
-        var ly = (int)Math.Floor(camPos.Y);
-        var lz = (int)Math.Floor(camPos.Z);
-
-        if (_dynamicLightPos != null) {
-
-            var ox = (int)Math.Floor(_dynamicLightPos.Value.X);
-            var oy = (int)Math.Floor(_dynamicLightPos.Value.Y);
-            var oz = (int)Math.Floor(_dynamicLightPos.Value.Z);
-
-            if (ox == lx && oy == ly && oz == lz && enabled) return;
-
-            // Remove old light
-            var oldBlock = GetBlock(ox, oy, oz);
-            var oldLum = Registry.GetLuminance(oldBlock.Id);
-
-            if (oldLum is { R: 0, G: 0, B: 0 }) {
-
-                RemoveLight(ox, oy, oz, true);
-            }
-        }
-
-        if (enabled) {
-
-            _dynamicLightPos = camPos;
-
-            // Add new light
-            var currentBlock = GetBlock(lx, ly, lz);
-
-            if (currentBlock.Solid) return;
-
-            // Torch Color: R=15, G=13, B=10
-            const ushort torchLight = 0xF | (13 << 4) | (10 << 8);
-
-            // Only overwrite if we are brighter
-            var existing = GetLight(lx, ly, lz);
-
-            // Merge
-            var r = Math.Max(existing & 0xF, torchLight & 0xF);
-            var g = Math.Max((existing >> 4) & 0xF, (torchLight >> 4) & 0xF);
-            var b = Math.Max((existing >> 8) & 0xF, (torchLight >> 8) & 0xF);
-            var s = (existing >> 12) & 0xF;
-
-            var newVal = (ushort)(r | (g << 4) | (b << 8) | (s << 12));
-
-            if (newVal == existing) return;
-
-            SetLight(lx, ly, lz, newVal);
-            var q = new Queue<(int, int, int)>();
-            q.Enqueue((lx, ly, lz));
-            PropagateLights(q, new Queue<(int, int, int)>());
-
-        } else {
-
-            _dynamicLightPos = null;
-        }
     }
 
     public void Update(Vector3 cameraPos) {
@@ -721,7 +757,13 @@ internal class World {
                                 var cnz = GetChunk(pos.X, pos.Y, pos.Z - 1);
                                 var cpz = GetChunk(pos.X, pos.Y, pos.Z + 1);
 
-                                chunk.BuildArrays(cnx, cpx, null, null, cnz, cpz);
+                                // Diagonals
+                                var cnxNz = GetChunk(pos.X - 1, pos.Y, pos.Z - 1);
+                                var cnxPz = GetChunk(pos.X - 1, pos.Y, pos.Z + 1);
+                                var cpxNz = GetChunk(pos.X + 1, pos.Y, pos.Z - 1);
+                                var cpxPz = GetChunk(pos.X + 1, pos.Y, pos.Z + 1);
+
+                                chunk.BuildArrays(cnx, cpx, null, null, cnz, cpz, cnxNz, cnxPz, cpxNz, cpxPz);
                                 _buildQueue.Enqueue(chunk);
 
                                 UpdateNeighbors(pos);
@@ -809,20 +851,20 @@ internal class World {
                     if (!_chunks.TryRemove(pos, out var chunk)) continue;
 
                     _renderList.Remove(chunk);
-                    
+
                     chunk.UnloadTime = GetTime();
                     _dyingChunks.Add(chunk);
                 }
             }
         }
-        
+
         for (var i = _dyingChunks.Count - 1; i >= 0; i--) {
-            
+
             var chunk = _dyingChunks[i];
             var elapsed = GetTime() - chunk.UnloadTime;
 
             if (!(elapsed > 0.5)) continue;
-                
+
             chunk.Unload();
             _dyingChunks.RemoveAt(i);
         }
@@ -837,7 +879,7 @@ internal class World {
 
         var camDir = Vector3.Normalize(camera.Target - camera.Position);
         var camPos = camera.Position;
-        
+
         var loadAnimLoc = GetShaderLocation(material.Shader, "animTime");
         var unloadTimerLoc = GetShaderLocation(material.Shader, "unloadTimer");
 
@@ -907,22 +949,22 @@ internal class World {
                 DrawMesh(mesh, material, Raymath.MatrixTranslate(chunk.X * Chunk.Width, 0, chunk.Z * Chunk.Depth));
             }
         }
-        
+
         // Render Dying Chunks
         foreach (var chunk in _dyingChunks) {
-            
+
             // Frustum Culling for Dying
-             var min = new Vector3(chunk.X * Chunk.Width, 0, chunk.Z * Chunk.Depth);
-             var max = new Vector3(min.X + Chunk.Width, Chunk.Height, min.Z + Chunk.Depth);
- 
-             if (!frustum.IntersectsBox(min, max)) continue;
-             
-             foreach (var mesh in chunk.Meshes) {
- 
-                 SetShaderValue(material.Shader, loadAnimLoc, (float)(GetTime() - chunk.SpawnTime), ShaderUniformDataType.Float);
-                 SetShaderValue(material.Shader, unloadTimerLoc, (float)(GetTime() - chunk.UnloadTime), ShaderUniformDataType.Float);
-                 DrawMesh(mesh, material, Raymath.MatrixTranslate(chunk.X * Chunk.Width, 0, chunk.Z * Chunk.Depth));
-             }
+            var min = new Vector3(chunk.X * Chunk.Width, 0, chunk.Z * Chunk.Depth);
+            var max = new Vector3(min.X + Chunk.Width, Chunk.Height, min.Z + Chunk.Depth);
+
+            if (!frustum.IntersectsBox(min, max)) continue;
+
+            foreach (var mesh in chunk.Meshes) {
+
+                SetShaderValue(material.Shader, loadAnimLoc, (float)(GetTime() - chunk.SpawnTime), ShaderUniformDataType.Float);
+                SetShaderValue(material.Shader, unloadTimerLoc, (float)(GetTime() - chunk.UnloadTime), ShaderUniformDataType.Float);
+                DrawMesh(mesh, material, Raymath.MatrixTranslate(chunk.X * Chunk.Width, 0, chunk.Z * Chunk.Depth));
+            }
         }
     }
 
@@ -939,7 +981,12 @@ internal class World {
 
     private void UpdateNeighbors(ChunkPos pos) {
 
-        Span<ChunkPos> neighbors = [new(pos.X + 1, pos.Y, pos.Z), new(pos.X - 1, pos.Y, pos.Z), new(pos.X, pos.Y + 1, pos.Z), new(pos.X, pos.Y - 1, pos.Z), new(pos.X, pos.Y, pos.Z + 1), new(pos.X, pos.Y, pos.Z - 1)];
+        Span<ChunkPos> neighbors = [
+            new(pos.X + 1, pos.Y, pos.Z), new(pos.X - 1, pos.Y, pos.Z), new(pos.X, pos.Y + 1, pos.Z), new(pos.X, pos.Y - 1, pos.Z), new(pos.X, pos.Y, pos.Z + 1), new(pos.X, pos.Y, pos.Z - 1),
+
+            // DIAGONALS
+            new(pos.X - 1, pos.Y, pos.Z - 1), new(pos.X - 1, pos.Y, pos.Z + 1), new(pos.X + 1, pos.Y, pos.Z - 1), new(pos.X + 1, pos.Y, pos.Z + 1)
+        ];
 
         foreach (var nPos in neighbors) {
 
@@ -952,7 +999,12 @@ internal class World {
             var nz = GetChunk(nPos.X, nPos.Y, nPos.Z - 1);
             var pz = GetChunk(nPos.X, nPos.Y, nPos.Z + 1);
 
-            nChunk.BuildArrays(nx, px, ny, py, nz, pz);
+            var nxNz = GetChunk(nPos.X - 1, nPos.Y, nPos.Z - 1);
+            var nxPz = GetChunk(nPos.X - 1, nPos.Y, nPos.Z + 1);
+            var pxNz = GetChunk(nPos.X + 1, nPos.Y, nPos.Z - 1);
+            var pxPz = GetChunk(nPos.X + 1, nPos.Y, nPos.Z + 1);
+
+            nChunk.BuildArrays(nx, px, ny, py, nz, pz, nxNz, nxPz, pxNz, pxPz);
             _buildQueue.Enqueue(nChunk);
         }
     }

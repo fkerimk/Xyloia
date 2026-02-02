@@ -188,7 +188,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
     public volatile bool IsDirty;
 
-    public unsafe void BuildArrays(Chunk? nx, Chunk? px, Chunk? ny, Chunk? py, Chunk? nz, Chunk? pz) {
+    public unsafe void BuildArrays(Chunk? nx, Chunk? px, Chunk? ny, Chunk? py, Chunk? nz, Chunk? pz, Chunk? nxNz, Chunk? nxPz, Chunk? pxNz, Chunk? pxPz) {
 
         if (_disposed || _blocks == null || _light == null) return;
 
@@ -201,9 +201,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         var newCLists = new List<List<byte>>();
         var newILists = new List<ushort[]>();
 
-        var blocks = _blocks;
-
-        fixed (Block* pBlocks = blocks)
+        fixed (Block* pBlocks = _blocks)
         fixed (ushort* pLight = _light) {
 
             for (var x = 0; x < Width; x++)
@@ -800,53 +798,46 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                 ushort GetLightSafe(int cx, int cy, int cz, ushort* pL) {
 
-                    if (cx is >= 0 and < Width && cy is >= 0 and < Height && cz is >= 0 and < Depth) return pL[(cx * Depth + cz) * Height + cy];
+                    if (cy is < 0 or >= Height) return 0; // Vertical limits (Sky/Void)
 
-                    return cy switch {
+                    return cx switch {
 
-                        >= Height => 0xF000,
-                        < 0       => 0,
+                        // Optimize local access
+                        >= 0 and < 16 when cz is >= 0 and < 16 => pL[(cx * 16 + cz) * 256 + cy],
 
-                        _ => cx switch {
+                        // Diagonal & Neighbor Checks
+                        < 0 when cz < 0   => nxNz?.GetLight(cx + 16, cy, cz + 16) ?? 0,
+                        < 0 when cz >= 16 => nxPz?.GetLight(cx + 16, cy, cz - 16) ?? 0,
+                        < 0               => nx?.GetLight(cx + 16, cy, cz) ?? 0,
 
-                            < 0      => nx?.GetLight(cx + Width, cy, cz) ?? 0,
-                            >= Width => px?.GetLight(cx - Width, cy, cz) ?? 0,
+                        >= 16 when cz < 0   => pxNz?.GetLight(cx - 16, cy, cz + 16) ?? 0,
+                        >= 16 when cz >= 16 => pxPz?.GetLight(cx - 16, cy, cz - 16) ?? 0,
+                        >= 16               => px?.GetLight(cx - 16, cy, cz) ?? 0,
 
-                            _ => cz switch {
-
-                                < 0      => nz?.GetLight(cx, cy, cz + Depth) ?? 0,
-                                >= Depth => pz?.GetLight(cx, cy, cz - Depth) ?? 0,
-                                _        => 0
-                            }
-                        }
+                        _ => cz < 0 ? nz?.GetLight(cx, cy, cz + 16) ?? 0 : pz?.GetLight(cx, cy, cz - 16) ?? 0
                     };
-
                 }
 
                 Block GetBlockSafe(int cx, int cy, int cz, Block* pB) {
 
-                    if (_disposed) return new Block();
+                    if (_disposed || cy is < 0 or >= Height) return new Block();
 
                     return cx switch {
 
-                        >= 0 and < Width when cy is >= 0 and < Height && cz is >= 0 and < Depth => pB[(cx * Depth + cz) * Height + cy],
-                        < 0                                                                     => nx?.GetBlock(cx + Width, cy, cz) ?? new Block(),
-                        >= Width                                                                => px?.GetBlock(cx - Width, cy, cz) ?? new Block(),
+                        // Optimize local access
+                        >= 0 and < 16 when cz is >= 0 and < 16 => pB[(cx * 16 + cz) * 256 + cy],
 
-                        _ => cy switch {
+                        // Diagonal & Neighbor Checks
+                        < 0 when cz < 0   => nxNz?.GetBlock(cx + 16, cy, cz + 16) ?? new Block(),
+                        < 0 when cz >= 16 => nxPz?.GetBlock(cx + 16, cy, cz - 16) ?? new Block(),
+                        < 0               => nx?.GetBlock(cx + 16, cy, cz) ?? new Block(),
 
-                            < 0       => ny?.GetBlock(cx, Height - 1, cz) ?? new Block(),
-                            >= Height => py?.GetBlock(cx, 0, cz) ?? new Block(),
+                        >= 16 when cz < 0   => pxNz?.GetBlock(cx - 16, cy, cz + 16) ?? new Block(),
+                        >= 16 when cz >= 16 => pxPz?.GetBlock(cx - 16, cy, cz - 16) ?? new Block(),
+                        >= 16               => px?.GetBlock(cx - 16, cy, cz) ?? new Block(),
 
-                            _ => cz switch {
-
-                                < 0      => nz?.GetBlock(cx, cy, cz + Depth) ?? new Block(),
-                                >= Depth => pz?.GetBlock(cx, cy, 0) ?? new Block(),
-                                _        => new Block()
-                            }
-                        }
+                        _ => cz < 0 ? nz?.GetBlock(cx, cy, cz + 16) ?? new Block() : pz?.GetBlock(cx, cy, cz - 16) ?? new Block()
                     };
-
                 }
 
                 // BFS check to see if a block is encased in opaque blocks. Uses reused collections from MeshBuilder to avoid zero-alloc.
