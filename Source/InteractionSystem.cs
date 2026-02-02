@@ -9,8 +9,7 @@ internal class InteractionSystem(World world) {
     private byte _selectedBlockId = 1;
     private byte[] _availableBlocks = [];
 
-    private World.RaycastResult _currentHit;
-
+    private RaycastResult _currentHit;
     private RenderTexture2D _uiTexture;
     private Camera3D _uiCamera;
     private Mesh _uiMesh;
@@ -23,7 +22,7 @@ internal class InteractionSystem(World world) {
 
         for (byte i = 1; i < 255; i++) {
 
-            if (Registry.GetUv(i).Width > 0) list.Add(i);
+            if (Registry.GetFaceUv(i).Width > 0) list.Add(i);
         }
 
         _availableBlocks = list.ToArray();
@@ -53,91 +52,239 @@ internal class InteractionSystem(World world) {
 
         if (_uiMesh.Vertices != null) UnloadMesh(_uiMesh);
 
-        var uv = Registry.GetUv(_selectedBlockId);
+        var model = Registry.GetModel(_selectedBlockId);
 
-        var mesh = new Mesh {
-            VertexCount = 24,
-            TriangleCount = 12,
-            Vertices = (float*)NativeMemory.Alloc(24 * 3 * sizeof(float)),
-            Normals = (float*)NativeMemory.Alloc(24 * 3 * sizeof(float)),
-            TexCoords = (float*)NativeMemory.Alloc(24 * 2 * sizeof(float)),
-            Indices = (ushort*)NativeMemory.Alloc(36 * sizeof(ushort))
-        };
+        // Count faces
+        var faceCount = 0;
 
-        float[] verts = [
+        if (model is { Elements.Count: > 0 }) {
 
-            // Front
-            -0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
+            faceCount += model.Elements.Sum(el => el.Faces.Count);
+        } else {
 
-            // Back
-            0.5f, -0.5f, -0.5f, -0.5f, -0.5f, -0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f, -0.5f,
-
-            // Top
-            -0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, -0.5f, -0.5f, 0.5f, -0.5f,
-
-            // Bottom
-            -0.5f, -0.5f, -0.5f, 0.5f, -0.5f, -0.5f, 0.5f, -0.5f, 0.5f, -0.5f, -0.5f, 0.5f,
-
-            // Right
-            0.5f, -0.5f, 0.5f, 0.5f, -0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f, 0.5f,
-
-            // Left
-            -0.5f, -0.5f, -0.5f, -0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f, -0.5f
-        ];
-
-        Marshal.Copy(verts, 0, (IntPtr)mesh.Vertices, verts.Length);
-
-        short[] indices = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11, 12, 13, 14, 12, 14, 15, 16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23];
-        Marshal.Copy(indices, 0, (IntPtr)mesh.Indices, indices.Length);
-
-        var u0 = uv.X;
-        var v0 = uv.Y;
-        var u1 = uv.X + uv.Width;
-        var v1 = uv.Y + uv.Height;
-
-        var texCoords = new float[48];
-
-        for (var i = 0; i < 6; i++) {
-
-            var off = i * 8;
-
-            texCoords[off + 0] = u0;
-            texCoords[off + 1] = v1;
-            texCoords[off + 2] = u1;
-            texCoords[off + 3] = v1;
-            texCoords[off + 4] = u1;
-            texCoords[off + 5] = v0;
-            texCoords[off + 6] = u0;
-            texCoords[off + 7] = v0;
+            faceCount = 6; // Default cube
         }
 
-        Marshal.Copy(texCoords, 0, (IntPtr)mesh.TexCoords, texCoords.Length);
+        if (faceCount == 0) return;
 
-        float[] normals = [
+        var mesh = new Mesh {
+            VertexCount = faceCount * 4,
+            TriangleCount = faceCount * 2,
+            Vertices = (float*)NativeMemory.Alloc((nuint)(faceCount * 4 * 3 * sizeof(float))),
+            Normals = (float*)NativeMemory.Alloc((nuint)(faceCount * 4 * 3 * sizeof(float))),
+            TexCoords = (float*)NativeMemory.Alloc((nuint)(faceCount * 4 * 2 * sizeof(float))),
+            Indices = (ushort*)NativeMemory.Alloc((nuint)(faceCount * 6 * sizeof(ushort)))
+        };
 
-            // Front (0, 0, 1)
-            0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+        var vIdx = 0;
+        var iIdx = 0;
 
-            // Back (0, 0, -1)
-            0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1,
+        if (model is { Elements.Count: > 0 }) {
 
-            // Top (0, 1, 0)
-            0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
+            foreach (var el in model.Elements) {
 
-            // Bottom (0, -1, 0)
-            0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0,
+                var min = new Vector3(el.From[0], el.From[1], el.From[2]) / 16f - new Vector3(0.5f);
+                var max = new Vector3(el.To[0], el.To[1], el.To[2]) / 16f - new Vector3(0.5f);
 
-            // Right (1, 0, 0)
-            1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,
+                // Faces
+                if (el.Faces.TryGetValue("north", out var fN)) {
 
-            // Left (-1, 0, 0)
-            -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0
-        ];
+                    var uv = Registry.ResolveFaceUv(model, fN);
 
-        Marshal.Copy(normals, 0, (IntPtr)mesh.Normals, normals.Length);
+                    // North (Z-)
+                    AddFace(
+                        new Vector3(max.X, min.Y, min.Z), // P1: MaxX, MinY, MinZ
+                        new Vector3(min.X, min.Y, min.Z), // P2: MinX, MinY, MinZ
+                        new Vector3(min.X, max.Y, min.Z), // P3: MinX, MaxY, MinZ
+                        new Vector3(max.X, max.Y, min.Z), // P4: MaxX, MaxY, MinZ
+                        new Vector3(0, 0, -1),
+                        uv
+                    );
+                }
+
+                if (el.Faces.TryGetValue("south", out var fS)) {
+
+                    var uv = Registry.ResolveFaceUv(model, fS);
+
+                    // South (Z+)
+                    AddFace(
+                        new Vector3(min.X, min.Y, max.Z), // P1: MinX, MinY, MaxZ
+                        new Vector3(max.X, min.Y, max.Z), // P2: MaxX, MinY, MaxZ
+                        new Vector3(max.X, max.Y, max.Z), // P3: MaxX, MaxY, MaxZ
+                        new Vector3(min.X, max.Y, max.Z), // P4: MinX, MaxY, MaxZ
+                        new Vector3(0, 0, 1),
+                        uv
+                    );
+                }
+
+                if (el.Faces.TryGetValue("east", out var fE)) {
+
+                    var uv = Registry.ResolveFaceUv(model, fE);
+
+                    // East (X+)
+                    AddFace(
+                        new Vector3(max.X, min.Y, max.Z), // P1: MaxX, MinY, MaxZ
+                        new Vector3(max.X, min.Y, min.Z), // P2: MaxX, MinY, MinZ
+                        new Vector3(max.X, max.Y, min.Z), // P3: MaxX, MaxY, MinZ
+                        new Vector3(max.X, max.Y, max.Z), // P4: MaxX, MaxY, MaxZ 
+                        new Vector3(1, 0, 0),
+                        uv
+                    );
+                }
+
+                if (el.Faces.TryGetValue("west", out var fW)) {
+
+                    var uv = Registry.ResolveFaceUv(model, fW);
+
+                    AddFace(
+                        new Vector3(min.X, min.Y, min.Z), // P1: MinX, MinY, MinZ
+                        new Vector3(min.X, min.Y, max.Z), // P2: MinX, MinY, MaxZ
+                        new Vector3(min.X, max.Y, max.Z), // P3: MinX, MaxY, MaxZ
+                        new Vector3(min.X, max.Y, min.Z), // P4: MinX, MaxY, MinZ
+                        new Vector3(-1, 0, 0),
+                        uv
+                    );
+                }
+
+                if (el.Faces.TryGetValue("up", out var fU)) {
+
+                    var uv = Registry.ResolveFaceUv(model, fU);
+
+                    // Up (Y+)
+                    AddFace(
+                        new Vector3(min.X, max.Y, max.Z), // P1: MinX, MaxY, MaxZ
+                        new Vector3(max.X, max.Y, max.Z), // P2: MaxX, MaxY, MaxZ
+                        new Vector3(max.X, max.Y, min.Z), // P3: MaxX, MaxY, MinZ
+                        new Vector3(min.X, max.Y, min.Z), // P4: MinX, MaxY, MinZ
+                        new Vector3(0, 1, 0),
+                        uv
+                    );
+                }
+
+                if (el.Faces.TryGetValue("down", out var fD)) {
+
+                    var uv = Registry.ResolveFaceUv(model, fD);
+
+                    // Down (Y-)
+                    AddFace(
+                        new Vector3(min.X, min.Y, min.Z), // P1: MinX, min.Y, MinZ
+                        new Vector3(max.X, min.Y, min.Z), // P2: MaxX, min.Y, MinZ
+                        new Vector3(max.X, min.Y, max.Z), // P3: MaxX, min.Y, max.Z
+                        new Vector3(min.X, min.Y, max.Z), // P4: MinX, min.Y, max.Z
+                        new Vector3(0, -1, 0),
+                        uv
+                    );
+                }
+            }
+
+        } else {
+
+            // Default Cube
+            var uv = Registry.GetFaceUv(_selectedBlockId);
+            var min = new Vector3(-0.5f);
+            var max = new Vector3(0.5f);
+
+            // Front(S), Back(N), Top(U), Bottom(D), Left(W), Right(E) - Just duplicating specific faces for simple cube
+            AddFace(new Vector3(min.X, min.Y, max.Z), new Vector3(max.X, min.Y, max.Z), new Vector3(max.X, max.Y, max.Z), new Vector3(min.X, max.Y, max.Z), Vector3.UnitZ, uv);  // Front
+            AddFace(new Vector3(max.X, min.Y, min.Z), new Vector3(min.X, min.Y, min.Z), new Vector3(min.X, max.Y, min.Z), new Vector3(max.X, max.Y, min.Z), -Vector3.UnitZ, uv); // Back
+            AddFace(new Vector3(min.X, max.Y, max.Z), new Vector3(max.X, max.Y, max.Z), new Vector3(max.X, max.Y, min.Z), new Vector3(min.X, max.Y, min.Z), Vector3.UnitY, uv);  // Top
+            AddFace(new Vector3(min.X, min.Y, min.Z), new Vector3(max.X, min.Y, min.Z), new Vector3(max.X, min.Y, max.Z), new Vector3(min.X, min.Y, max.Z), -Vector3.UnitY, uv); // Bottom
+            AddFace(new Vector3(max.X, min.Y, max.Z), new Vector3(max.X, min.Y, min.Z), new Vector3(max.X, max.Y, min.Z), new Vector3(max.X, max.Y, max.Z), Vector3.UnitX, uv);  // Right
+            AddFace(new Vector3(min.X, min.Y, min.Z), new Vector3(min.X, min.Y, max.Z), new Vector3(min.X, max.Y, max.Z), new Vector3(min.X, max.Y, min.Z), -Vector3.UnitX, uv); // Left
+        }
 
         UploadMesh(ref mesh, false);
         _uiMesh = mesh;
+
+        return;
+
+        void AddFace(Vector3 p1, Vector3 p2, Vector3 p3, Vector3 p4, Vector3 n, UvInfo uv) {
+
+            // Vertices
+            var vPtr = mesh.Vertices + vIdx * 3;
+            vPtr[0] = p1.X;
+            vPtr[1] = p1.Y;
+            vPtr[2] = p1.Z;
+            vPtr[3] = p2.X;
+            vPtr[4] = p2.Y;
+            vPtr[5] = p2.Z;
+            vPtr[6] = p3.X;
+            vPtr[7] = p3.Y;
+            vPtr[8] = p3.Z;
+            vPtr[9] = p4.X;
+            vPtr[10] = p4.Y;
+            vPtr[11] = p4.Z;
+
+            // Normals
+            var nPtr = mesh.Normals + vIdx * 3;
+
+            for (var k = 0; k < 4; k++) {
+                
+                nPtr[k * 3 + 0] = n.X;
+                nPtr[k * 3 + 1] = n.Y;
+                nPtr[k * 3 + 2] = n.Z;
+            }
+
+            // UVs - Apply Rotation if needed
+            var tPtr = mesh.TexCoords + vIdx * 2;
+
+            float u1 = uv.X, v1 = uv.Y;
+            float u2 = uv.X + uv.Width, v2 = uv.Y + uv.Height;
+
+            Vector2 uv1, uv2, uv3, uv4;
+
+            switch (uv.Rotation) {
+                
+                case 90:
+                    uv1 = new Vector2(u1, v1); // P1(BL) gets TL texture
+                    uv2 = new Vector2(u1, v2); // P2(BR) gets BL texture
+                    uv3 = new Vector2(u2, v2); // P3(TR) gets BR texture
+                    uv4 = new Vector2(u2, v1); // P4(TL) gets TR texture
+                    break;
+                case 180:
+                    
+                    uv1 = new Vector2(u2, v1);
+                    uv2 = new Vector2(u1, v1);
+                    uv3 = new Vector2(u1, v2);
+                    uv4 = new Vector2(u2, v2);
+                    break;
+                case 270:
+                    
+                    uv1 = new Vector2(u2, v2);
+                    uv2 = new Vector2(u2, v1);
+                    uv3 = new Vector2(u1, v1);
+                    uv4 = new Vector2(u1, v2);
+                    break;
+                
+                default:
+                    uv1 = new Vector2(u1, v2); // BL
+                    uv2 = new Vector2(u2, v2); // BR
+                    uv3 = new Vector2(u2, v1); // TR
+                    uv4 = new Vector2(u1, v1); // TL
+                    break;
+            }
+
+            tPtr[0] = uv1.X;
+            tPtr[1] = uv1.Y;
+            tPtr[2] = uv2.X;
+            tPtr[3] = uv2.Y;
+            tPtr[4] = uv3.X;
+            tPtr[5] = uv3.Y;
+            tPtr[6] = uv4.X;
+            tPtr[7] = uv4.Y;
+
+            // Indices (0,1,2, 0,2,3) relative to vIdx
+            var iPtr = mesh.Indices + iIdx;
+            iPtr[0] = (ushort)(vIdx + 0);
+            iPtr[1] = (ushort)(vIdx + 1);
+            iPtr[2] = (ushort)(vIdx + 2);
+            iPtr[3] = (ushort)(vIdx + 0);
+            iPtr[4] = (ushort)(vIdx + 2);
+            iPtr[5] = (ushort)(vIdx + 3);
+
+            vIdx += 4;
+            iIdx += 6;
+        }
     }
 
     public void Update(Vector3 camPos, Vector3 camDir) {

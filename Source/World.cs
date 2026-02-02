@@ -3,17 +3,6 @@ using System.Numerics;
 using Raylib_cs;
 using static Raylib_cs.Raylib;
 
-internal readonly struct ChunkPos(int x, int y, int z) : IEquatable<ChunkPos> {
-
-    public readonly int X = x, Y = y, Z = z;
-
-    public override bool Equals(object? obj) => obj is ChunkPos p && p.X == X && p.Y == Y && p.Z == Z;
-
-    public override int GetHashCode() => HashCode.Combine(X, Y, Z);
-
-    public bool Equals(ChunkPos other) => X == other.X && Y == other.Y && Z == other.Z;
-}
-
 // ReSharper disable InconsistentlySynchronizedField
 internal class World {
 
@@ -59,7 +48,7 @@ internal class World {
     private byte GetSkylight(int x, int y, int z) => (byte)((GetLight(x, y, z) >> 12) & 0xF);
 
     private void SetSkylight(int x, int y, int z, byte val) {
-        
+
         var light = GetLight(x, y, z);
         light = (ushort)((light & 0x0FFF) | ((val & 0xF) << 12));
         SetLight(x, y, z, light);
@@ -94,7 +83,7 @@ internal class World {
         while (blockQueue.TryDequeue(out var p)) {
 
             var light = GetLight(p.x, p.y, p.z);
-            
+
             var r = (byte)(light & 0xF);
             var g = (byte)((light >> 4) & 0xF);
             var b = (byte)((light >> 8) & 0xF);
@@ -106,10 +95,12 @@ internal class World {
             foreach (var d in dirs) {
 
                 int nx = p.x + d.dx, ny = p.y + d.dy, nz = p.z + d.dz;
+
                 if (ny is < 0 or >= Chunk.Height) continue;
 
                 var nBlock = GetBlock(nx, ny, nz);
-                if (!Registry.IsTranslucent(nBlock.Id)) continue;
+
+                if (Registry.IsOpaque(nBlock.Id)) continue;
 
                 var nLight = GetLight(nx, ny, nz);
                 var nr = (byte)(nLight & 0xF);
@@ -117,9 +108,21 @@ internal class World {
                 var nb = (byte)((nLight >> 8) & 0xF);
 
                 var changed = false;
-                if (r > 1 && nr < r - 1) { nr = (byte)(r - 1); changed = true; }
-                if (g > 1 && ng < g - 1) { ng = (byte)(g - 1); changed = true; }
-                if (b > 1 && nb < b - 1) { nb = (byte)(b - 1); changed = true; }
+
+                if (r > 1 && nr < r - 1) {
+                    nr = (byte)(r - 1);
+                    changed = true;
+                }
+
+                if (g > 1 && ng < g - 1) {
+                    ng = (byte)(g - 1);
+                    changed = true;
+                }
+
+                if (b > 1 && nb < b - 1) {
+                    nb = (byte)(b - 1);
+                    changed = true;
+                }
 
                 if (!changed) continue;
 
@@ -134,6 +137,7 @@ internal class World {
         while (skyQueue.TryDequeue(out var p)) {
 
             var light = GetSkylight(p.x, p.y, p.z);
+
             if (light <= 0) continue;
 
             Span<(int dx, int dy, int dz)> dirs = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)];
@@ -141,10 +145,12 @@ internal class World {
             foreach (var d in dirs) {
 
                 int nx = p.x + d.dx, ny = p.y + d.dy, nz = p.z + d.dz;
+
                 if (ny is < 0 or >= Chunk.Height) continue;
 
                 var nBlock = GetBlock(nx, ny, nz);
-                if (!Registry.IsTranslucent(nBlock.Id)) continue;
+
+                if (Registry.IsOpaque(nBlock.Id)) continue;
 
                 var nLight = GetSkylight(nx, ny, nz);
                 var decay = (d.dy == -1 && light == 15) ? 0 : 1;
@@ -170,24 +176,24 @@ internal class World {
     }
 
     private void RemoveLight(int x, int y, int z, bool isBlockLight) {
-        
+
         if (!QualitySettings.Lighting) return;
-        
+
         var removeQ = new Queue<(int x, int y, int z, ushort val)>();
         var refillQ = new Queue<(int x, int y, int z)>();
 
         var startVal = GetLight(x, y, z);
-        
+
         // Mask out the relevant channels we are removing
         var removeMask = isBlockLight ? (ushort)0x0FFF : (ushort)0xF000;
-        
+
         var valToRemove = (ushort)(startVal & removeMask);
 
         if (valToRemove == 0) return;
 
         // Set the world value to 0 for these channels
         SetLight(x, y, z, (ushort)(startVal & ~removeMask));
-        
+
         removeQ.Enqueue((x, y, z, valToRemove));
         MarkChunkDirty(x, y, z);
 
@@ -198,34 +204,38 @@ internal class World {
             foreach (var d in dirs) {
 
                 int nx = p.x + d.dx, ny = p.y + d.dy, nz = p.z + d.dz;
+
                 if (ny is < 0 or >= Chunk.Height) continue;
 
                 var nLight = GetLight(nx, ny, nz);
                 var nRelevant = (ushort)(nLight & removeMask);
-                
+
                 if (nRelevant == 0) continue;
 
                 ushort nextRemoveVal = 0;
 
                 // Process each channel independently
                 if (isBlockLight) {
-                    
+
                     // Red (Bits 0-3)
                     var r = p.val & 0xF;
                     var nr = nRelevant & 0xF;
-                    if (r > 0 && nr == r - 1) nextRemoveVal |= (ushort)nr;
+                    if (r > 0 && nr == r - 1)
+                        nextRemoveVal |= (ushort)nr;
                     else if (nr >= r) refillQ.Enqueue((nx, ny, nz));
 
                     // Green (Bits 4-7)
                     var g = (p.val >> 4) & 0xF;
                     var ng = (nRelevant >> 4) & 0xF;
-                    if (g > 0 && ng == g - 1) nextRemoveVal |= (ushort)(ng << 4);
+                    if (g > 0 && ng == g - 1)
+                        nextRemoveVal |= (ushort)(ng << 4);
                     else if (ng >= g) refillQ.Enqueue((nx, ny, nz));
 
                     // Blue (Bits 8-11)
                     var b = (p.val >> 8) & 0xF;
                     var nb = (nRelevant >> 8) & 0xF;
-                    if (b > 0 && nb == b - 1) nextRemoveVal |= (ushort)(nb << 8);
+                    if (b > 0 && nb == b - 1)
+                        nextRemoveVal |= (ushort)(nb << 8);
                     else if (nb >= b) refillQ.Enqueue((nx, ny, nz));
 
                 } else {
@@ -235,12 +245,13 @@ internal class World {
                     var ns = (nRelevant >> 12) & 0xF;
                     var decay = (d.dy == -1 && s == 15) ? 0 : 1;
 
-                    if (s > 0 && ns == s - decay) nextRemoveVal |= (ushort)(ns << 12);
+                    if (s > 0 && ns == s - decay)
+                        nextRemoveVal |= (ushort)(ns << 12);
                     else if (ns >= s) refillQ.Enqueue((nx, ny, nz));
                 }
 
                 if (nextRemoveVal > 0) {
-                    
+
                     // Remove these specific channel bits from the world
                     SetLight(nx, ny, nz, (ushort)(nLight & ~nextRemoveVal));
                     removeQ.Enqueue((nx, ny, nz, nextRemoveVal));
@@ -249,8 +260,10 @@ internal class World {
             }
         }
 
-        if (isBlockLight) PropagateLights(refillQ, new Queue<(int, int, int)>());
-        else PropagateLights(new Queue<(int, int, int)>(), refillQ);
+        if (isBlockLight)
+            PropagateLights(refillQ, new Queue<(int, int, int)>());
+        else
+            PropagateLights(new Queue<(int, int, int)>(), refillQ);
     }
 
     // Simple AABB vs World Collision Helper
@@ -282,8 +295,8 @@ internal class World {
         var oldBlock = GetBlock(x, y, z);
         var oldLum = Registry.GetLuminance(oldBlock.Id);
         var newLum = Registry.GetLuminance(blockId);
-        var oldTranslucent = Registry.IsTranslucent(oldBlock.Id);
-        var newTranslucent = Registry.IsTranslucent(blockId);
+        var oldTranslucent = !Registry.IsOpaque(oldBlock.Id);
+        var newTranslucent = !Registry.IsOpaque(blockId);
 
         if (oldBlock.Id == blockId) return;
 
@@ -299,22 +312,23 @@ internal class World {
         chunk.SetBlock(lx, ly, lz, new Block(blockId));
 
         // Block Light Update
-        // 1. Remove old light if it was an emitter
+
+        // Remove old light if it was an emitter
         if (oldLum.R > 0 || oldLum.G > 0 || oldLum.B > 0) {
             RemoveLight(x, y, z, true);
         }
 
-        // 2. Set new light if it is an emitter
+        // Set new light if it is an emitter
         if (newLum.R > 0 || newLum.G > 0 || newLum.B > 0) {
 
             var r = (byte)(newLum.R / 16);
             var g = (byte)(newLum.G / 16);
             var bl = (byte)(newLum.B / 16);
-            
+
             var light = GetLight(x, y, z);
             light = (ushort)((light & 0xF000) | (r & 0xF) | ((g & 0xF) << 4) | ((bl & 0xF) << 8));
             SetLight(x, y, z, light);
-            
+
             var q = new Queue<(int, int, int)>();
             q.Enqueue((x, y, z));
             PropagateLights(q, new Queue<(int, int, int)>());
@@ -326,9 +340,11 @@ internal class World {
                 // Became translucent -> Light can flow in
                 var q = new Queue<(int, int, int)>();
                 Span<(int dx, int dy, int dz)> dirs = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)];
+
                 foreach (var d in dirs) {
                     if ((GetLight(x + d.dx, y + d.dy, z + d.dz) & 0x0FFF) > 0) q.Enqueue((x + d.dx, y + d.dy, z + d.dz));
                 }
+
                 PropagateLights(q, new Queue<(int, int, int)>());
 
             } else {
@@ -343,9 +359,11 @@ internal class World {
             if (newTranslucent) {
                 var q = new Queue<(int, int, int)>();
                 Span<(int dx, int dy, int dz)> dirs = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)];
+
                 foreach (var d in dirs) {
                     if (GetSkylight(x + d.dx, y + d.dy, z + d.dz) > 0) q.Enqueue((x + d.dx, y + d.dy, z + d.dz));
                 }
+
                 PropagateLights(new Queue<(int, int, int)>(), q);
 
             } else {
@@ -356,16 +374,19 @@ internal class World {
         RebuildChunk(chunk);
 
         switch (lx) {
+
             case 0:  RebuildChunkAt(cx - 1, cy, cz); break;
             case 15: RebuildChunkAt(cx + 1, cy, cz); break;
         }
 
         switch (ly) {
+
             case 0:   RebuildChunkAt(cx, cy - 1, cz); break;
             case 255: RebuildChunkAt(cx, cy + 1, cz); break;
         }
 
         switch (lz) {
+
             case 0:  RebuildChunkAt(cx, cy, cz - 1); break;
             case 15: RebuildChunkAt(cx, cy, cz + 1); break;
         }
@@ -390,14 +411,6 @@ internal class World {
                 _buildQueue.Enqueue(chunk);
             }
         );
-    }
-
-    public struct RaycastResult {
-
-        public bool Hit;
-        public int X, Y, Z;
-        public int FaceX, FaceY, FaceZ;
-        public byte BlockId;
     }
 
     public RaycastResult Raycast(Vector3 origin, Vector3 direction, float maxDistance) {
@@ -499,7 +512,7 @@ internal class World {
         var lz = (int)Math.Floor(camPos.Z);
 
         if (_dynamicLightPos != null) {
-             
+
             var ox = (int)Math.Floor(_dynamicLightPos.Value.X);
             var oy = (int)Math.Floor(_dynamicLightPos.Value.Y);
             var oz = (int)Math.Floor(_dynamicLightPos.Value.Z);
@@ -509,17 +522,17 @@ internal class World {
             // Remove old light
             var oldBlock = GetBlock(ox, oy, oz);
             var oldLum = Registry.GetLuminance(oldBlock.Id);
-            
+
             if (oldLum is { R: 0, G: 0, B: 0 }) {
-                
+
                 RemoveLight(ox, oy, oz, true);
             }
         }
 
         if (enabled) {
-            
+
             _dynamicLightPos = camPos;
-            
+
             // Add new light
             var currentBlock = GetBlock(lx, ly, lz);
 
@@ -527,16 +540,16 @@ internal class World {
 
             // Torch Color: R=15, G=13, B=10
             const ushort torchLight = 0xF | (13 << 4) | (10 << 8);
-                
+
             // Only overwrite if we are brighter
             var existing = GetLight(lx, ly, lz);
-                
+
             // Merge
             var r = Math.Max(existing & 0xF, torchLight & 0xF);
             var g = Math.Max((existing >> 4) & 0xF, (torchLight >> 4) & 0xF);
             var b = Math.Max((existing >> 8) & 0xF, (torchLight >> 8) & 0xF);
             var s = (existing >> 12) & 0xF;
-                
+
             var newVal = (ushort)(r | (g << 4) | (b << 8) | (s << 12));
 
             if (newVal == existing) return;
@@ -547,7 +560,7 @@ internal class World {
             PropagateLights(q, new Queue<(int, int, int)>());
 
         } else {
-            
+
             _dynamicLightPos = null;
         }
     }
@@ -653,7 +666,7 @@ internal class World {
                                     var light = GetLight(wx, wy, wz);
                                     light = (ushort)((light & 0xF000) | (r & 0xF) | ((g & 0xF) << 4) | ((bl & 0xF) << 8));
                                     SetLight(wx, wy, wz, light);
-                                    
+
                                     bQ.Enqueue((wx, wy, wz));
                                 }
 

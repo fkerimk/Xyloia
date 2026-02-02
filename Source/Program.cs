@@ -14,13 +14,7 @@ internal static class Program {
 
         SetWindowMonitor(0);
 
-        Registry.Initialize("Assets/Textures/Grass.png", "Assets/Textures/Dirt.png", "Assets/Textures/Sand.png", "Assets/Textures/Glow_Red.png", "Assets/Textures/Glow_Green.png", "Assets/Textures/Glow_Blue.png", "Assets/Textures/Glow_Yellow.png", "Assets/Textures/Glow_Magenta.png");
-
-        Registry.SetLuminance(Registry.GetId("glow_red"), new Color(255, 0, 0, 255));
-        Registry.SetLuminance(Registry.GetId("glow_green"), new Color(0, 255, 0, 255));
-        Registry.SetLuminance(Registry.GetId("glow_blue"), new Color(0, 0, 255, 255));
-        Registry.SetLuminance(Registry.GetId("glow_yellow"), new Color(255, 255, 0, 255));
-        Registry.SetLuminance(Registry.GetId("glow_magenta"), new Color(255, 0, 255, 255));
+        Registry.Initialize(".");
 
         var material = LoadMaterialDefault();
         SetMaterialTexture(ref material, MaterialMapIndex.Albedo, Registry.AtlasTexture);
@@ -69,15 +63,8 @@ internal static class Program {
             if (IsKeyPressed(KeyboardKey.L)) dynamicLight = !dynamicLight;
             
             world.UpdateDynamicLight(cam.Position, dynamicLight);
-            
-            if (dynamicLight) {
-                
-                SetShaderValue(shader, dynLightLoc, cam.Position, ShaderUniformDataType.Vec3);
-                
-            } else {
-                
-                SetShaderValue(shader, dynLightLoc, new Vector3(99999, 99999, 99999), ShaderUniformDataType.Vec3);
-            }
+
+            SetShaderValue(shader, dynLightLoc, dynamicLight ? cam.Position : new Vector3(99999, 99999, 99999), ShaderUniformDataType.Vec3);
 
             world.Update(cam.Position);
 
@@ -156,6 +143,7 @@ internal static class Program {
             BeginMode3D(cam);
             world.Render(cam, material);
             interaction.Draw3D();
+            DrawCompass();
             EndMode3D();
 
             interaction.DrawUi();
@@ -172,5 +160,55 @@ internal static class Program {
         CloseWindow();
 
         return 0;
+
+        // Compass 
+        void DrawCompass() {
+            
+            if (!freeCamMode) return;
+            
+            var center = cam.Position; 
+            center.Y -= 1.0f; 
+            const float radius = 1.0f;
+
+            // Draw Circle
+            const int segments = 32;
+            
+            for (var i = 0; i < segments; i++) {
+                
+                var a1 = (float)i / segments * Math.PI * 2;
+                var a2 = (float)(i + 1) / segments * Math.PI * 2;
+                var p1 = center + new Vector3((float)Math.Cos(a1) * radius, 0, (float)Math.Sin(a1) * radius);
+                var p2 = center + new Vector3((float)Math.Cos(a2) * radius, 0, (float)Math.Sin(a2) * radius);
+                DrawLine3D(p1, p2, Color.White);
+            }
+
+            // N (-Z)
+            var nPos = center + new Vector3(0, 0, -radius);
+            DrawLine3D(nPos + new Vector3(-0.05f, 0, 0), nPos + new Vector3(-0.05f, 0, -0.1f), Color.Red);
+            DrawLine3D(nPos + new Vector3(-0.05f, 0, -0.1f), nPos + new Vector3(0.05f, 0, 0), Color.Red);
+            DrawLine3D(nPos + new Vector3(0.05f, 0, 0), nPos + new Vector3(0.05f, 0, -0.1f), Color.Red);
+
+            // S (+Z)
+            var sPos = center + new Vector3(0, 0, radius);
+            DrawLine3D(sPos + new Vector3(0.05f, 0, 0), sPos + new Vector3(-0.05f, 0, 0), Color.Blue);
+            DrawLine3D(sPos + new Vector3(-0.05f, 0, 0), sPos + new Vector3(-0.05f, 0, 0.05f), Color.Blue);
+            DrawLine3D(sPos + new Vector3(-0.05f, 0, 0.05f), sPos + new Vector3(0.05f, 0, 0.05f), Color.Blue);
+            DrawLine3D(sPos + new Vector3(0.05f, 0, 0.1f), sPos + new Vector3(0.05f, 0, 0.1f), Color.Blue);
+            DrawLine3D(sPos + new Vector3(0.05f, 0, 0.1f), sPos + new Vector3(-0.05f, 0, 0.1f), Color.Blue);
+
+            // E (+X)
+            var ePos = center + new Vector3(radius, 0, 0);
+            DrawLine3D(ePos + new Vector3(0.1f, 0, -0.05f), ePos + new Vector3(0, 0, -0.05f), Color.Green);
+            DrawLine3D(ePos + new Vector3(0, 0, -0.05f), ePos + new Vector3(0, 0, 0.05f), Color.Green);
+            DrawLine3D(ePos + new Vector3(0, 0, 0), ePos + new Vector3(0.08f, 0, 0), Color.Green);
+            DrawLine3D(ePos + new Vector3(0, 0, 0.05f), ePos + new Vector3(0.1f, 0, 0.05f), Color.Green);
+            
+            // W (-X)
+            var wPos = center + new Vector3(-radius, 0, 0);
+            DrawLine3D(wPos + new Vector3(-0.1f, 0, -0.05f), wPos + new Vector3(-0.1f, 0, 0.05f), Color.Yellow);
+            DrawLine3D(wPos + new Vector3(0, 0, -0.05f), wPos + new Vector3(0, 0, 0.05f), Color.Yellow);
+            DrawLine3D(wPos + new Vector3(-0.1f, 0, 0.05f), wPos + new Vector3(-0.05f, 0, 0), Color.Yellow);
+            DrawLine3D(wPos + new Vector3(-0.05f, 0, 0), wPos + new Vector3(0, 0, 0.05f), Color.Yellow);
+        }
     }
 }

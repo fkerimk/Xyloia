@@ -1,0 +1,6 @@
+{
+  "parent": "Models/TestTemplate",
+  "textures": {
+    "top": "Textures/TestTop"
+  }
+}
