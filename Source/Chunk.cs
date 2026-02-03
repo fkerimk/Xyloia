@@ -339,7 +339,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 // Optimization: If a block (Simple or Complex) is fully surrounded by Opaque blocks, don't draw it.
                 if (IsHidden(x, y, z, pBlocks)) continue;
 
-                var isTrans = !block.Opaque;
+                var isTrans = !block.Opaque && !block.Solid;
                 var targetMesh = isTrans ? builder.Transparent : builder.Opaque;
 
                 if (Registry.IsSimple(block.Id) && block.Data == 0) {
