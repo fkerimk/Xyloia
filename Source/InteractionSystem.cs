@@ -9,7 +9,7 @@ internal class InteractionSystem(World? world) {
     private PlayerController? _player;
 
     public void SetWorld(World world) {
-        
+
         _world = world;
         _currentHit = new RaycastResult(); // Reset state
     }
@@ -97,20 +97,32 @@ internal class InteractionSystem(World? world) {
                 var min = new Vector3(el.From[0], el.From[1], el.From[2]) / 16f - new Vector3(0.5f);
                 var max = new Vector3(el.To[0], el.To[1], el.To[2]) / 16f - new Vector3(0.5f);
 
+                // Calculate rotation matrix if rotation exists
+                var rotMatrix = Matrix4x4.Identity;
+
+                if (el.Rotation != null) {
+                    
+                    var angleRad = el.Rotation.Angle * (float)Math.PI / 180f;
+
+                    var axis = el.Rotation.Axis switch {
+                        
+                        "x" => Vector3.UnitX,
+                        "y" => Vector3.UnitY,
+                        _   => Vector3.UnitZ
+                    };
+
+                    var origin = new Vector3(el.Rotation.Origin[0], el.Rotation.Origin[1], el.Rotation.Origin[2]) / 16f - new Vector3(0.5f);
+
+                    rotMatrix = Matrix4x4.CreateTranslation(-origin) * Matrix4x4.CreateFromAxisAngle(axis, angleRad) * Matrix4x4.CreateTranslation(origin);
+                }
+
                 // Faces
                 if (el.Faces.TryGetValue("north", out var fN)) {
 
                     var uv = Registry.ResolveFaceUv(model, fN);
 
                     // North (Z-)
-                    AddFace(
-                        new Vector3(max.X, min.Y, min.Z), // P1: MaxX, MinY, MinZ
-                        new Vector3(min.X, min.Y, min.Z), // P2: MinX, MinY, MinZ
-                        new Vector3(min.X, max.Y, min.Z), // P3: MinX, MaxY, MinZ
-                        new Vector3(max.X, max.Y, min.Z), // P4: MaxX, MaxY, MinZ
-                        new Vector3(0, 0, -1),
-                        uv
-                    );
+                    AddFace(Transform(new Vector3(max.X, min.Y, min.Z)), Transform(new Vector3(min.X, min.Y, min.Z)), Transform(new Vector3(min.X, max.Y, min.Z)), Transform(new Vector3(max.X, max.Y, min.Z)), Vector3.TransformNormal(new Vector3(0, 0, -1), rotMatrix), uv);
                 }
 
                 if (el.Faces.TryGetValue("south", out var fS)) {
@@ -118,14 +130,7 @@ internal class InteractionSystem(World? world) {
                     var uv = Registry.ResolveFaceUv(model, fS);
 
                     // South (Z+)
-                    AddFace(
-                        new Vector3(min.X, min.Y, max.Z), // P1: MinX, MinY, MaxZ
-                        new Vector3(max.X, min.Y, max.Z), // P2: MaxX, MinY, MaxZ
-                        new Vector3(max.X, max.Y, max.Z), // P3: MaxX, MaxY, MaxZ
-                        new Vector3(min.X, max.Y, max.Z), // P4: MinX, MaxY, MaxZ
-                        new Vector3(0, 0, 1),
-                        uv
-                    );
+                    AddFace(Transform(new Vector3(min.X, min.Y, max.Z)), Transform(new Vector3(max.X, min.Y, max.Z)), Transform(new Vector3(max.X, max.Y, max.Z)), Transform(new Vector3(min.X, max.Y, max.Z)), Vector3.TransformNormal(new Vector3(0, 0, 1), rotMatrix), uv);
                 }
 
                 if (el.Faces.TryGetValue("east", out var fE)) {
@@ -133,28 +138,15 @@ internal class InteractionSystem(World? world) {
                     var uv = Registry.ResolveFaceUv(model, fE);
 
                     // East (X+)
-                    AddFace(
-                        new Vector3(max.X, min.Y, max.Z), // P1: MaxX, MinY, MaxZ
-                        new Vector3(max.X, min.Y, min.Z), // P2: MaxX, MinY, MinZ
-                        new Vector3(max.X, max.Y, min.Z), // P3: MaxX, MaxY, MinZ
-                        new Vector3(max.X, max.Y, max.Z), // P4: MaxX, MaxY, MaxZ 
-                        new Vector3(1, 0, 0),
-                        uv
-                    );
+                    AddFace(Transform(new Vector3(max.X, min.Y, max.Z)), Transform(new Vector3(max.X, min.Y, min.Z)), Transform(new Vector3(max.X, max.Y, min.Z)), Transform(new Vector3(max.X, max.Y, max.Z)), Vector3.TransformNormal(new Vector3(1, 0, 0), rotMatrix), uv);
                 }
 
                 if (el.Faces.TryGetValue("west", out var fW)) {
 
                     var uv = Registry.ResolveFaceUv(model, fW);
 
-                    AddFace(
-                        new Vector3(min.X, min.Y, min.Z), // P1: MinX, MinY, MinZ
-                        new Vector3(min.X, min.Y, max.Z), // P2: MinX, MinY, MaxZ
-                        new Vector3(min.X, max.Y, max.Z), // P3: MinX, MaxY, MaxZ
-                        new Vector3(min.X, max.Y, min.Z), // P4: MinX, MaxY, MinZ
-                        new Vector3(-1, 0, 0),
-                        uv
-                    );
+                    // West (X-)
+                    AddFace(Transform(new Vector3(min.X, min.Y, min.Z)), Transform(new Vector3(min.X, min.Y, max.Z)), Transform(new Vector3(min.X, max.Y, max.Z)), Transform(new Vector3(min.X, max.Y, min.Z)), Vector3.TransformNormal(new Vector3(-1, 0, 0), rotMatrix), uv);
                 }
 
                 if (el.Faces.TryGetValue("up", out var fU)) {
@@ -162,14 +154,7 @@ internal class InteractionSystem(World? world) {
                     var uv = Registry.ResolveFaceUv(model, fU);
 
                     // Up (Y+)
-                    AddFace(
-                        new Vector3(min.X, max.Y, max.Z), // P1: MinX, MaxY, MaxZ
-                        new Vector3(max.X, max.Y, max.Z), // P2: MaxX, MaxY, MaxZ
-                        new Vector3(max.X, max.Y, min.Z), // P3: MaxX, MaxY, MinZ
-                        new Vector3(min.X, max.Y, min.Z), // P4: MinX, MaxY, MinZ
-                        new Vector3(0, 1, 0),
-                        uv
-                    );
+                    AddFace(Transform(new Vector3(min.X, max.Y, max.Z)), Transform(new Vector3(max.X, max.Y, max.Z)), Transform(new Vector3(max.X, max.Y, min.Z)), Transform(new Vector3(min.X, max.Y, min.Z)), Vector3.TransformNormal(new Vector3(0, 1, 0), rotMatrix), uv);
                 }
 
                 if (el.Faces.TryGetValue("down", out var fD)) {
@@ -177,15 +162,13 @@ internal class InteractionSystem(World? world) {
                     var uv = Registry.ResolveFaceUv(model, fD);
 
                     // Down (Y-)
-                    AddFace(
-                        new Vector3(min.X, min.Y, min.Z), // P1: MinX, min.Y, MinZ
-                        new Vector3(max.X, min.Y, min.Z), // P2: MaxX, min.Y, MinZ
-                        new Vector3(max.X, min.Y, max.Z), // P3: MaxX, min.Y, max.Z
-                        new Vector3(min.X, min.Y, max.Z), // P4: MinX, min.Y, max.Z
-                        new Vector3(0, -1, 0),
-                        uv
-                    );
+                    AddFace(Transform(new Vector3(min.X, min.Y, min.Z)), Transform(new Vector3(max.X, min.Y, min.Z)), Transform(new Vector3(max.X, min.Y, max.Z)), Transform(new Vector3(min.X, min.Y, max.Z)), Vector3.TransformNormal(new Vector3(0, -1, 0), rotMatrix), uv);
                 }
+
+                continue;
+
+                // Helper to transform
+                Vector3 Transform(Vector3 v) => Vector3.Transform(v, rotMatrix);
             }
 
         } else {
@@ -369,7 +352,7 @@ internal class InteractionSystem(World? world) {
                     var targetZ = _currentHit.Z + _currentHit.FaceZ;
 
                     if (Registry.IsSolid(_selectedBlockId)) {
-                        
+
                         var playerAabb = _player.GetAabb();
                         var blockAabb = new BoundingBox(new Vector3(targetX, targetY, targetZ), new Vector3(targetX + 1, targetY + 1, targetZ + 1));
 

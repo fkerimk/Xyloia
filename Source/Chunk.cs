@@ -419,7 +419,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                         z1 = max.Z;
                     }
 
-                    if (!isRotated || isAxisAligned) {
+                    if ((!isRotated || isAxisAligned) && el.Rotation == null) {
 
                         // Local function to resolve source face for axis-aligned rotation
                         string GetSourceFace(Vector3 dir) {
@@ -532,16 +532,33 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                         var minRot = min - c;
                         var maxRot = max - c;
 
-                        foreach (var kvp in el.Faces) {
+                        Matrix4x4? elRotMat = null;
 
-                            var f = kvp.Value;
-                            var faceUv = Registry.ResolveFaceUv(model, f);
+                        if (el.Rotation != null) {
+                            
+                            var origin = new Vector3(el.Rotation.Origin[0], el.Rotation.Origin[1], el.Rotation.Origin[2]) / 16f - new Vector3(0.5f);
+                            
+                            var axis = el.Rotation.Axis switch {
+                                
+                                "x" => Vector3.UnitX,
+                                "y" => Vector3.UnitY,
+                                _   => Vector3.UnitZ
+                            };
+
+                            var angle = el.Rotation.Angle * (float)(Math.PI / 180.0);
+                            
+                            elRotMat = Matrix4x4.CreateTranslation(-origin) * Matrix4x4.CreateFromAxisAngle(axis, angle) * Matrix4x4.CreateTranslation(origin);
+                        }
+
+                        foreach (var (key, value) in el.Faces) {
+
+                            var faceUv = Registry.ResolveFaceUv(model, value);
 
                             if (ShouldCull(faceUv.CullMask, pBlocks)) continue;
 
                             Vector3 p1, p2, p3, p4;
 
-                            switch (kvp.Key) {
+                            switch (key) {
 
                                 case "north": // Standard: TR, TL, BL, BR
                                     p1 = new Vector3(maxRot.X, maxRot.Y, minRot.Z);
@@ -592,6 +609,15 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                                     break;
 
                                 default: continue;
+                            }
+
+                            // Apply Element Rotation
+                            if (elRotMat.HasValue) {
+                                
+                                p1 = Vector3.Transform(p1, elRotMat.Value);
+                                p2 = Vector3.Transform(p2, elRotMat.Value);
+                                p3 = Vector3.Transform(p3, elRotMat.Value);
+                                p4 = Vector3.Transform(p4, elRotMat.Value);
                             }
 
                             // Apply Rotation
