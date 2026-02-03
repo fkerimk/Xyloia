@@ -3,7 +3,18 @@ using System.Runtime.InteropServices;
 using Raylib_cs;
 using static Raylib_cs.Raylib;
 
-internal class InteractionSystem(World world) {
+internal class InteractionSystem(World? world) {
+
+    private World? _world = world;
+    private PlayerController? _player;
+
+    public void SetWorld(World world) {
+        
+        _world = world;
+        _currentHit = new RaycastResult(); // Reset state
+    }
+
+    public void SetPlayer(PlayerController player) { _player = player; }
 
     private int _selectionIndex;
     private byte _selectedBlockId = 1;
@@ -293,7 +304,9 @@ internal class InteractionSystem(World world) {
 
     public void Update(Vector3 camPos, Vector3 camDir) {
 
-        _currentHit = world.Raycast(camPos, camDir, 5.0f);
+        if (_world == null) return;
+
+        _currentHit = _world.Raycast(camPos, camDir, 5.0f);
 
         var wheel = GetMouseWheelMove();
 
@@ -313,7 +326,7 @@ internal class InteractionSystem(World world) {
 
             if (IsMouseButtonPressed(MouseButton.Left)) {
 
-                world.SetBlock(_currentHit.X, _currentHit.Y, _currentHit.Z, 0);
+                _world.SetBlock(_currentHit.X, _currentHit.Y, _currentHit.Z, 0);
 
             } else if (IsMouseButtonPressed(MouseButton.Right)) {
 
@@ -349,7 +362,22 @@ internal class InteractionSystem(World world) {
                         break;
                 }
 
-                world.SetBlock(_currentHit.X + _currentHit.FaceX, _currentHit.Y + _currentHit.FaceY, _currentHit.Z + _currentHit.FaceZ, new Block(_selectedBlockId, data));
+                // Check if block intersects with player
+                if (_player != null) {
+                    var targetX = _currentHit.X + _currentHit.FaceX;
+                    var targetY = _currentHit.Y + _currentHit.FaceY;
+                    var targetZ = _currentHit.Z + _currentHit.FaceZ;
+
+                    if (Registry.IsSolid(_selectedBlockId)) {
+                        
+                        var playerAabb = _player.GetAabb();
+                        var blockAabb = new BoundingBox(new Vector3(targetX, targetY, targetZ), new Vector3(targetX + 1, targetY + 1, targetZ + 1));
+
+                        if (CheckCollisionBoxes(playerAabb, blockAabb)) return; // Prevent placement
+                    }
+                }
+
+                _world.SetBlock(_currentHit.X + _currentHit.FaceX, _currentHit.Y + _currentHit.FaceY, _currentHit.Z + _currentHit.FaceZ, new Block(_selectedBlockId, data));
             }
         }
     }

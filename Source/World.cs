@@ -15,27 +15,30 @@ internal class World {
     private volatile int _activeTaskCount;
     private Vector3? _lastPlayerLightPos;
 
-    private const int ViewDistance = 16;
-
+    // Camera pos for threaded generation sorting
     private int _realTimeCamX, _realTimeCamZ;
 
-    private static readonly ChunkPos[] ScanOffsets;
+    private readonly int _viewDistance;
+    private readonly ChunkPos[] _scanOffsets;
 
-    static World() {
+    public World(int seed = 1337, int viewDistance = 16) {
+
+        WorldGenConfig.Data.General.Seed = seed;
+        _viewDistance = viewDistance;
 
         var offsets = new List<ChunkPos>();
 
-        for (var x = -ViewDistance; x <= ViewDistance; x++)
-        for (var z = -ViewDistance; z <= ViewDistance; z++)
-            if (x * x + z * z <= ViewDistance * ViewDistance)
+        for (var x = -_viewDistance; x <= _viewDistance; x++)
+        for (var z = -_viewDistance; z <= _viewDistance; z++)
+            if (x * x + z * z <= _viewDistance * _viewDistance)
                 offsets.Add(new ChunkPos(x, 0, z));
 
-        ScanOffsets = offsets.OrderBy(p => p.X * p.X + p.Z * p.Z).ToArray();
+        _scanOffsets = offsets.OrderBy(p => p.X * p.X + p.Z * p.Z).ToArray();
     }
 
     private Chunk? GetChunk(int x, int y, int z) { return _chunks.GetValueOrDefault(new ChunkPos(x, y, z)); }
 
-    private Block GetBlock(int x, int y, int z) {
+    public Block GetBlock(int x, int y, int z) {
 
         var cx = x >> 4;
         var cy = y >> 8;
@@ -630,7 +633,7 @@ internal class World {
 
         if (_activeTaskCount < maxTasks) {
 
-            foreach (var offset in ScanOffsets) {
+            foreach (var offset in _scanOffsets) {
 
                 if (_activeTaskCount >= maxTasks) break;
 
@@ -659,7 +662,7 @@ internal class World {
 
                             var distSq = (x - _realTimeCamX) * (x - _realTimeCamX) + (z - _realTimeCamZ) * (z - _realTimeCamZ);
 
-                            if (distSq > (ViewDistance + 2) * (ViewDistance + 2)) return;
+                            if (distSq > (_viewDistance + 2) * (_viewDistance + 2)) return;
 
                             var chunk = new Chunk(pos.X, pos.Y, pos.Z);
                             chunk.SpawnTime = GetTime();
@@ -805,7 +808,7 @@ internal class World {
             var dx = readyChunk.X - camCx;
             var dz = readyChunk.Z - camCz;
 
-            if ((dx * dx + dz * dz) > (ViewDistance + 2) * (ViewDistance + 2)) {
+            if ((dx * dx + dz * dz) > (_viewDistance + 2) * (_viewDistance + 2)) {
 
                 if (_chunks.TryRemove(new ChunkPos(readyChunk.X, readyChunk.Y, readyChunk.Z), out var removed)) {
 
@@ -835,7 +838,7 @@ internal class World {
             float dx = kvp.Key.X - camCx;
             float dz = kvp.Key.Z - camCz;
 
-            if ((dx * dx + dz * dz) <= (ViewDistance + 4) * (ViewDistance + 4)) continue;
+            if ((dx * dx + dz * dz) <= (_viewDistance + 4) * (_viewDistance + 4)) continue;
 
             chunksToRemove.Add(kvp.Key);
 
@@ -884,7 +887,7 @@ internal class World {
         var unloadTimerLoc = GetShaderLocation(material.Shader, "unloadTimer");
 
         var aspect = (float)GetScreenWidth() / GetScreenHeight();
-        var frustum = new Frustum(camera, aspect, 0.5f, (ViewDistance + 8) * 16f); // Far Plane increased for fade-out headroom
+        var frustum = new Frustum(camera, aspect, 0.5f, (_viewDistance + 8) * 16f); // Far Plane increased for fade-out headroom
 
         var count = _renderList.Count;
 
@@ -925,21 +928,16 @@ internal class World {
 
             var distSq = dx * dx + dy * dy + dz * dz;
 
-            switch (distSq) {
+            // Broad distance culling (Total 3D distance) - Increased +128 to allow fade-out without popping
+            if (distSq > (_viewDistance * Chunk.Width + 128) * (_viewDistance * Chunk.Width + 128)) continue;
 
-                // Broad distance culling (Total 3D distance) - Increased +128 to allow fade-out without popping
-                case > (ViewDistance * Chunk.Width + 128) * (ViewDistance * Chunk.Width + 128): continue;
+            // Dot product culling (Frustum-lite)
+            if (distSq > 16384) {
 
-                // Dot product culling (Frustum-lite)
-                case > 16384: {
+                var dist = (float)Math.Sqrt(distSq);
+                var dot = (dx / dist) * camDir.X + (dy / dist) * camDir.Y + (dz / dist) * camDir.Z;
 
-                    var dist = (float)Math.Sqrt(distSq);
-                    var dot = (dx / dist) * camDir.X + (dy / dist) * camDir.Y + (dz / dist) * camDir.Z;
-
-                    if (dot < -0.3f) continue;
-
-                    break;
-                }
+                if (dot < -0.3f) continue;
             }
 
             foreach (var mesh in chunk.Meshes) {

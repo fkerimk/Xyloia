@@ -1,0 +1,33 @@
+{
+    "Elements": [
+        {
+            "Anchor": "Top, Left",
+            "Offset": "25, 25",
+            "Type": "Text",
+            "Label": "Xyloia",
+            "Size": "50"
+        },
+        {
+            "Anchor": "Bottom, Left",
+            "Offset": "25, 25",
+            "Type": "VerticalLayout",
+            "Spacing": "10",
+            "Items": [
+                {
+                    "Type": "Button",
+                    "Label": "Play",
+                    "Size": "25",
+                    "Action": "StartGame"
+                },
+                {
+                    "Type": "Button",
+                    "Label": "Quit",
+                    "Size": "25",
+                    "Action": "ExitGame"
+                }
+            ]
+        }
+    ],
+    "FreeCursor": true,
+    "InGame": false
+}

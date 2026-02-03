@@ -1,0 +1,32 @@
+{
+    "Elements": [
+        {
+            "Anchor": "Center",
+            "Type": "VerticalLayout",
+            "Spacing": "10",
+            "Items": [
+                {
+                    "Type": "Button",
+                    "Label": "Resume",
+                    "Size": "25",
+                    "Action": "CloseMenu"
+                },
+                {
+                    "Type": "Button",
+                    "Label": "Menu",
+                    "Size": "25",
+                    "Action": "CloseMenu, StopGame, OpenMenu(GUI/Menu)"
+                },
+                {
+                    "Type": "Button",
+                    "Label": "Quit",
+                    "Size": "25",
+                    "Action": "ExitGame"
+                }
+            ]
+        }
+    ],
+    "FreeCursor": true,
+    "InGame": true,
+    "PauseGame": true
+}
