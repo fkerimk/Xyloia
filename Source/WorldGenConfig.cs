@@ -49,6 +49,7 @@ internal static class WorldGenConfig {
 
         public int Seed { get; set; }
         public int WaterLevel { get; set; }
+        public string WaterBlock { get; set; } = "Water";
     }
 
     public class TerrainSettings {

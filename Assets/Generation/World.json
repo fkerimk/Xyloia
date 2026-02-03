@@ -1,7 +1,8 @@
 {
     "General": {
         "Seed": 1337,
-        "WaterLevel": 64
+        "WaterLevel": 64,
+        "WaterBlock": "Water"
     },
     "Terrain": {
         "Scale": 0.005,

@@ -48,7 +48,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         public readonly HashSet<(int x, int y, int z)> BfsVisited = [];
 
         public void Clear() {
-            
+
             Opaque.Clear();
             Transparent.Clear();
         }
@@ -63,7 +63,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
             public ushort VIdx;
 
             public void Clear() {
-                
+
                 Verts.Clear();
                 Norms.Clear();
                 Uvs.Clear();
@@ -130,7 +130,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
     }
 
     private static T[] RentAndClear<T>(int size) {
-        
+
         var arr = System.Buffers.ArrayPool<T>.Shared.Rent(size);
         Array.Clear(arr, 0, arr.Length);
 
@@ -145,6 +145,8 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         var t = config.Terrain;
         var c = config.Caves;
         var layers = config.Layers;
+        var biomes = config.Biomes.List.OrderByDescending(b => b.Threshold).ToList();
+        var waterId = Registry.GetId(config.General.WaterBlock);
 
         LightEmitters.Clear();
 
@@ -152,157 +154,24 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
             var ptr = pBlocks;
             var idx = 0;
-            var bScale = config.Bedrock.Scale;
 
-            // Biome Setup
-            var biomes = config.Biomes.List.OrderByDescending(b => b.Threshold).ToList();
-            var biomeScale = config.Biomes.Scale;
-            var waterLevel = config.General.WaterLevel;
-            var waterId = Registry.GetId("Water");
+            for (var locX = 0; locX < Width; locX++) {
 
-            for (var lx = 0; lx < Width; lx++) {
+                var wx = X * Width + locX;
 
-                float worldX = X * Width + lx;
+                for (var locZ = 0; locZ < Depth; locZ++) {
 
-                for (var lz = 0; lz < Depth; lz++) {
+                    var wz = Z * Depth + locZ;
 
-                    float worldZ = Z * Depth + lz;
+                    // Calculate biome blending
+                    var (b1, b2, tBlend) = GetBiomeBlend(wx, wz, config, biomes);
 
-                    // Biome selection & blending
-                    var biomeVal = Noise.Perlin2D(worldX * (float)biomeScale, worldZ * (float)biomeScale);
+                    // Calculate terrain height
+                    var height = GetTerrainHeight(wx, wz, t, b1, b2, tBlend);
+                    var bedrockH = GetBedrockHeight(wx, wz, config.Bedrock);
 
-                    var b1 = biomes[^1]; // Fallback to lowest
-                    var b2 = biomes[^1];
-                    float tBlend = 0; // 0 = b1, 1 = b2
-
-                    // Find where we are
-                    var found = false;
-                    const float blendRadius = 0.05f;
-
-                    for (var i = 0; i < biomes.Count; i++) {
-                        
-                        var bHigh = biomes[i];
-
-                        if (i == biomes.Count - 1) {
-                            
-                            // Lowest biome
-                            b1 = bHigh;
-                            b2 = bHigh;
-                            tBlend = 0;
-                            found = true;
-
-                            break;
-                        }
-
-                        var threshold = bHigh.Threshold;
-
-                        // Check if we are in the pure range of bHigh (above blend zone)
-                        if (biomeVal > threshold + blendRadius) {
-                            
-                            b1 = bHigh;
-                            b2 = bHigh;
-                            tBlend = 1.0f;
-                            found = true;
-
-                            break;
-                        }
-
-                        // Check if we are in the blend zone (between bHigh and the one below it)
-                        if (biomeVal > threshold - blendRadius) {
-                            
-                            b1 = biomes[i + 1]; // Lower biome
-                            b2 = bHigh;         // Higher biome
-
-                            // Map biomeVal from [threshold - blend, threshold + blend] to 0..1
-                            tBlend = (float)((biomeVal - (threshold - blendRadius)) / (2 * blendRadius));
-                            found = true;
-
-                            break;
-                        }
-                    }
-
-                    if (!found) {
-                        
-                        // Should technically be covered by the loop, but safety
-                        b1 = biomes[^1];
-                        b2 = biomes[^1];
-                    }
-
-                    // Interpolate terrain settings
-                    var finalBaseHeight = (int)float.Lerp(b1.BaseHeight, b2.BaseHeight, tBlend);
-                    var finalAmp = (int)float.Lerp(b1.HeightAmplitude, b2.HeightAmplitude, tBlend);
-
-                    // Natural terrain
-                    float noiseHeight = 0;
-                    float amplitude = 1;
-                    float frequency = 1;
-                    float totalAmplitude = 0;
-
-                    for (var i = 0; i < t.Octaves; i++) {
-                        
-                        noiseHeight += Noise.Perlin2D(worldX * (float)t.Scale * frequency, worldZ * (float)t.Scale * frequency) * amplitude;
-                        totalAmplitude += amplitude;
-
-                        amplitude *= (float)t.Persistence;
-                        frequency *= (float)t.Lacunarity;
-                    }
-
-                    // Normalize
-                    noiseHeight /= totalAmplitude;
-
-                    // Apply interpolated biome settings
-                    var height = (int)(finalBaseHeight + noiseHeight * finalAmp);
-
-                    // Bedrock height
-                    var bedrockH = (int)(config.Bedrock.MinHeight + (Noise.Perlin2D(worldX * (float)bScale, worldZ * (float)bScale) + 1f) * 0.5f * (config.Bedrock.MaxHeight - config.Bedrock.MinHeight));
-
-                    // Block selection (Coherent Noise Blending)
-                    byte surfId;
-                    byte subId;
-
-                    // Clustered noise for blending (Scale 0.1 means ~10 block blobs)
-                    var blendNoise = (Noise.Perlin2D(worldX * 0.1f, worldZ * 0.1f) + 1f) * 0.5f;
-
-                    // Modulate tBlend with noise to create organic borders
-                    const float spread = 0.4f;
-                    var modulatedT = tBlend + (blendNoise - 0.5f) * spread;
-
-                    // Transition Block Logic (e.g. GrassSnow between Plains and Mountains)
-                    if (b2.TransitionBlockId != 0 && tBlend is > 0.05f and < 0.95f) {
-
-                        // We want a band of TransitionBlock around the center
-                        const float bandWidth = 0.35f; // Width of the transition strip
-
-                        switch (modulatedT) {
-                            
-                            case > 0.5f - bandWidth / 2 and < 0.5f + bandWidth / 2:
-                                
-                                surfId = b2.TransitionBlockId;
-                                subId = b2.SubSurfaceBlockId;
-
-                                break;
-                            
-                            case >= 0.5f + bandWidth / 2:
-                                
-                                surfId = b2.SurfaceBlockId;
-                                subId = b2.SubSurfaceBlockId;
-
-                                break;
-                            
-                            default:
-                                surfId = b1.SurfaceBlockId;
-                                subId = b1.SubSurfaceBlockId;
-
-                                break;
-                        }
-
-                    } else {
-                        
-                        // Standard 2-way blend
-                        var useSecondary = modulatedT > 0.5f;
-                        surfId = useSecondary ? b2.SurfaceBlockId : b1.SurfaceBlockId;
-                        subId = useSecondary ? b2.SubSurfaceBlockId : b1.SubSurfaceBlockId;
-                    }
+                    // Determine block types for this column
+                    var (surfId, subId) = GetBiomeBlocks(wx, wz, b1, b2, tBlend);
 
                     for (var ly = 0; ly < Height; ly++) {
 
@@ -311,46 +180,33 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                         byte blockId = 0;
 
                         if (ly <= bedrockH) {
-                            
+
                             blockId = config.Bedrock.BlockId;
-                            
+
                         } else if (ly <= height) {
 
-                            // Surface / Biome Blocks
+                            // Determine block based on depth
                             if (ly == height)
                                 blockId = surfId;
                             else if (ly >= height - 3)
                                 blockId = subId;
                             else
-                                blockId = layers.Count > 0 ? layers[^1].BlockId : (byte)1; // Deepest layer or Stone
+                                blockId = layers.Count > 0 ? layers[^1].BlockId : (byte)1;
 
-                            // 4. Caves
+                            // Carve caves
                             if (c.Enabled && blockId != 0 && ly < height - 2) {
 
-                                float worldY = Y * Height + ly;
-
-                                float caveVal = 0;
-                                float cAmp = 1;
-                                float cFreq = 1;
-
-                                for (var ci = 0; ci < c.Octaves; ci++) {
-                                    caveVal += Noise.Perlin3D(worldX * (float)c.ScaleX * cFreq, worldY * (float)c.ScaleY * cFreq, worldZ * (float)c.ScaleZ * cFreq) * cAmp;
-                                    cAmp *= 0.5f;
-                                    cFreq *= 2.0f;
-                                }
-
-                                if (caveVal > c.Threshold) blockId = 0;
+                                if (GetCaveNoise(wx, Y * Height + ly, wz, c) > c.Threshold) blockId = 0;
                             }
-                            
-                        } else if (ly <= waterLevel) {
-                            
+                        } else if (ly <= config.General.WaterLevel) {
+
                             blockId = waterId;
                         }
 
                         *ptr++ = new Block(blockId);
 
                         if (blockId > 0) {
-                            
+
                             var lum = Registry.GetLuminance(blockId);
                             if (lum.R > 0 || lum.G > 0 || lum.B > 0) LightEmitters.Add(idx);
                         }
@@ -362,6 +218,82 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         }
 
         if (_light != null) Array.Clear(_light, 0, _light.Length);
+    }
+
+    private (WorldGenConfig.Biome b1, WorldGenConfig.Biome b2, float t) GetBiomeBlend(float x, float z, WorldGenConfig.Config config, List<WorldGenConfig.Biome> biomes) {
+
+        var val = Noise.Perlin2D(x * (float)config.Biomes.Scale, z * (float)config.Biomes.Scale);
+        const float blendRadius = 0.05f;
+
+        for (var i = 0; i < biomes.Count; i++) {
+
+            var b = biomes[i];
+
+            if (i == biomes.Count - 1) return (b, b, 0);
+
+            if (val > b.Threshold + blendRadius) return (b, b, 1.0f);
+
+            if (val > b.Threshold - blendRadius) {
+                var prev = biomes[i + 1];
+                var t = (float)((val - (b.Threshold - blendRadius)) / (2 * blendRadius));
+
+                return (prev, b, t);
+            }
+        }
+
+        var last = biomes[^1];
+
+        return (last, last, 0);
+    }
+
+    private int GetTerrainHeight(float x, float z, WorldGenConfig.TerrainSettings t, WorldGenConfig.Biome b1, WorldGenConfig.Biome b2, float blend) {
+
+        var baseH = float.Lerp(b1.BaseHeight, b2.BaseHeight, blend);
+        var amp = float.Lerp(b1.HeightAmplitude, b2.HeightAmplitude, blend);
+
+        float nH = 0, nAmp = 1, freq = 1, totAmp = 0;
+
+        for (var i = 0; i < t.Octaves; i++) {
+            nH += Noise.Perlin2D(x * (float)t.Scale * freq, z * (float)t.Scale * freq) * nAmp;
+            totAmp += nAmp;
+            nAmp *= (float)t.Persistence;
+            freq *= (float)t.Lacunarity;
+        }
+
+        return (int)(baseH + (nH / totAmp) * amp);
+    }
+
+    private int GetBedrockHeight(float x, float z, WorldGenConfig.BedrockSettings b) { return (int)(b.MinHeight + (Noise.Perlin2D(x * (float)b.Scale, z * (float)b.Scale) + 1f) * 0.5f * (b.MaxHeight - b.MinHeight)); }
+
+    private (byte surf, byte sub) GetBiomeBlocks(float x, float z, WorldGenConfig.Biome b1, WorldGenConfig.Biome b2, float blend) {
+
+        var noise = (Noise.Perlin2D(x * 0.1f, z * 0.1f) + 1f) * 0.5f;
+        var modT = blend + (noise - 0.5f) * 0.4f;
+
+        if (b2.TransitionBlockId != 0 && blend is > 0.05f and < 0.95f) {
+
+            const float width = 0.35f;
+
+            if (modT is > 0.5f - width / 2 and < 0.5f + width / 2) return (b2.TransitionBlockId, b2.SubSurfaceBlockId);
+            if (modT >= 0.5f + width / 2) return (b2.SurfaceBlockId, b2.SubSurfaceBlockId);
+
+            return (b1.SurfaceBlockId, b1.SubSurfaceBlockId);
+        }
+
+        return modT > 0.5f ? (b2.SurfaceBlockId, b2.SubSurfaceBlockId) : (b1.SurfaceBlockId, b1.SubSurfaceBlockId);
+    }
+
+    private float GetCaveNoise(float x, float y, float z, WorldGenConfig.CaveSettings c) {
+
+        float val = 0, amp = 1, freq = 1;
+
+        for (var i = 0; i < c.Octaves; i++) {
+            val += Noise.Perlin3D(x * (float)c.ScaleX * freq, y * (float)c.ScaleY * freq, z * (float)c.ScaleZ * freq) * amp;
+            amp *= 0.5f;
+            freq *= 2.0f;
+        }
+
+        return val;
     }
 
     public volatile bool IsDirty;
@@ -412,151 +344,62 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                 if (Registry.IsSimple(block.Id) && block.Data == 0) {
 
+                    // dx, dy, dz, fIdx, rx, ry, rz, ux, uy, uz, x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4, nx, ny, nz
+                    ReadOnlySpan<sbyte> faceData = [
+                        0, 0, -1, 0, -1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, // North
+                        0, 0, 1, 2, 1, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1,    // South
+                        1, 0, 0, 1, 0, 0, -1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0,   // East
+                        -1, 0, 0, 3, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, -1, 0, 0,  // West
+                        0, 1, 0, 4, 1, 0, 0, 0, 0, -1, 0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 0,   // Up
+                        0, -1, 0, 5, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, -1, 0   // Down
+                    ];
+
                     var faceLights = new ushort[4];
+                    var oldFaceLights = new ushort[4];
+                    const int stride = 25;
 
-                    // North (Z-1) | Face 0
-                    if (!IsOpaque(x, y, z - 1, pBlocks)) {
+                    for (var i = 0; i < 6; i++) {
 
-                        // Optimized FillLights for internal blocks, fallback for edges
-                        var uv = Registry.GetFaceUv(block.Id, 0);
+                        var offset = i * stride;
+                        var dx = faceData[offset];
+                        var dy = faceData[offset + 1];
+                        var dz = faceData[offset + 2];
+                        var fIdx = faceData[offset + 3];
 
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
-                            FillLightsSimple(idx - Height, -1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
+                        if (IsOpaque(x + dx, y + dy, z + dz, pBlocks)) continue;
+
+                        var uv = Registry.GetFaceUv(block.Id, fIdx);
+                        var idxOffset = (dx * Depth + dz) * Height + dy;
+                        var isSafe = z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254;
+
+                        var rx = faceData[offset + 4];
+                        var ry = faceData[offset + 5];
+                        var rz = faceData[offset + 6];
+                        var ux = faceData[offset + 7];
+                        var uy = faceData[offset + 8];
+                        var uz = faceData[offset + 9];
+
+                        if (isSafe)
+                            FillLightsSimple(idx + idxOffset, rx, ry, rz, ux, uy, uz, faceLights, pLight, pBlocks);
                         else
-                            FillLights(x, y, z - 1, -1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
+                            FillLights(x + dx, y + dy, z + dz, rx, ry, rz, ux, uy, uz, faceLights, pLight, pBlocks);
 
-                        Swap(faceLights);
-
-                        var oldFaceLights = new ushort[4];
-                        
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
-                            FillLightsSimple(idx - Height, -1, 0, 0, 0, 1, 0, oldFaceLights, pOldLight, pBlocks);
+                        if (fIdx == 5)
+                            SwapPairs(faceLights);
                         else
-                            FillLights(x, y, z - 1, -1, 0, 0, 0, 1, 0, oldFaceLights, pOldLight, pBlocks, true);
+                            Swap(faceLights);
 
-                        Swap(oldFaceLights);
-
-                        AddFace(targetMesh, x, y, z, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, uv, faceLights, oldFaceLights);
-                    }
-
-                    // South (Z+1) | Face 2
-                    if (!IsOpaque(x, y, z + 1, pBlocks)) {
-
-                        var uv = Registry.GetFaceUv(block.Id, 2);
-
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
-                            FillLightsSimple(idx + Height, 1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
+                        if (isSafe)
+                            FillLightsSimple(idx + idxOffset, rx, ry, rz, ux, uy, uz, oldFaceLights, pOldLight, pBlocks);
                         else
-                            FillLights(x, y, z + 1, 1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
+                            FillLights(x + dx, y + dy, z + dz, rx, ry, rz, ux, uy, uz, oldFaceLights, pOldLight, pBlocks, true);
 
-                        Swap(faceLights);
-
-                        var oldFaceLights = new ushort[4];
-                        
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
-                            FillLightsSimple(idx + Height, 1, 0, 0, 0, 1, 0, oldFaceLights, pOldLight, pBlocks);
+                        if (fIdx == 5)
+                            SwapPairs(oldFaceLights);
                         else
-                            FillLights(x, y, z + 1, 1, 0, 0, 0, 1, 0, oldFaceLights, pOldLight, pBlocks, true);
+                            Swap(oldFaceLights);
 
-                        Swap(oldFaceLights);
-
-                        AddFace(targetMesh, x, y, z, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, uv, faceLights, oldFaceLights);
-                    }
-
-                    // East (X+1) | Face 1
-                    if (!IsOpaque(x + 1, y, z, pBlocks)) {
-
-                        var uv = Registry.GetFaceUv(block.Id, 1);
-
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
-                            FillLightsSimple(idx + Depth * Height, 0, 0, -1, 0, 1, 0, faceLights, pLight, pBlocks);
-                        else
-                            FillLights(x + 1, y, z, 0, 0, -1, 0, 1, 0, faceLights, pLight, pBlocks);
-
-                        Swap(faceLights);
-
-                        var oldFaceLights = new ushort[4];
-                        
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
-                            FillLightsSimple(idx + Depth * Height, 0, 0, -1, 0, 1, 0, oldFaceLights, pOldLight, pBlocks);
-                        else
-                            FillLights(x + 1, y, z, 0, 0, -1, 0, 1, 0, oldFaceLights, pOldLight, pBlocks, true);
-
-                        Swap(oldFaceLights);
-
-                        AddFace(targetMesh, x, y, z, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, uv, faceLights, oldFaceLights);
-                    }
-
-                    // West (X-1) | Face 3
-                    if (!IsOpaque(x - 1, y, z, pBlocks)) {
-
-                        var uv = Registry.GetFaceUv(block.Id, 3);
-
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
-                            FillLightsSimple(idx - Depth * Height, 0, 0, 1, 0, 1, 0, faceLights, pLight, pBlocks);
-                        else
-                            FillLights(x - 1, y, z, 0, 0, 1, 0, 1, 0, faceLights, pLight, pBlocks);
-
-                        Swap(faceLights);
-
-                        var oldFaceLights = new ushort[4];
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
-                            FillLightsSimple(idx - Depth * Height, 0, 0, 1, 0, 1, 0, oldFaceLights, pOldLight, pBlocks);
-                        else
-                            FillLights(x - 1, y, z, 0, 0, 1, 0, 1, 0, oldFaceLights, pOldLight, pBlocks, true);
-
-                        Swap(oldFaceLights);
-
-                        AddFace(targetMesh, x, y, z, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, -1, 0, 0, uv, faceLights, oldFaceLights);
-                    }
-
-                    // Up (Y+1) | Face 4
-                    if (!IsOpaque(x, y + 1, z, pBlocks)) {
-
-                        // Assuming global height > 256 handled by py
-                        var uv = Registry.GetFaceUv(block.Id);
-
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
-                            FillLightsSimple(idx + 1, 1, 0, 0, 0, 0, -1, faceLights, pLight, pBlocks);
-                        else
-                            FillLights(x, y + 1, z, 1, 0, 0, 0, 0, -1, faceLights, pLight, pBlocks);
-
-                        Swap(faceLights);
-
-                        var oldFaceLights = new ushort[4];
-                        
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
-                            FillLightsSimple(idx + 1, 1, 0, 0, 0, 0, -1, oldFaceLights, pOldLight, pBlocks);
-                        else
-                            FillLights(x, y + 1, z, 1, 0, 0, 0, 0, -1, oldFaceLights, pOldLight, pBlocks, true);
-
-                        Swap(oldFaceLights);
-
-                        // x0=0,y1=1,z0=0 ...
-                        AddFace(targetMesh, x, y, z, 0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 0, uv, faceLights, oldFaceLights);
-                    }
-
-                    // Down (Y-1) | Face 5
-                    if (!IsOpaque(x, y - 1, z, pBlocks)) {
-
-                        var uv = Registry.GetFaceUv(block.Id, 5);
-
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
-                            FillLightsSimple(idx - 1, 1, 0, 0, 0, 0, 1, faceLights, pLight, pBlocks);
-                        else
-                            FillLights(x, y - 1, z, 1, 0, 0, 0, 0, 1, faceLights, pLight, pBlocks);
-
-                        SwapPairs(faceLights);
-
-                        var oldFaceLights = new ushort[4];
-                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
-                            FillLightsSimple(idx - 1, 1, 0, 0, 0, 0, 1, oldFaceLights, pOldLight, pBlocks);
-                        else
-                            FillLights(x, y - 1, z, 1, 0, 0, 0, 0, 1, oldFaceLights, pOldLight, pBlocks, true);
-
-                        SwapPairs(oldFaceLights);
-
-                        AddFace(targetMesh, x, y, z, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, -1, 0, uv, faceLights, oldFaceLights);
+                        AddFace(targetMesh, x, y, z, faceData[offset + 10], faceData[offset + 11], faceData[offset + 12], faceData[offset + 13], faceData[offset + 14], faceData[offset + 15], faceData[offset + 16], faceData[offset + 17], faceData[offset + 18], faceData[offset + 19], faceData[offset + 20], faceData[offset + 21], faceData[offset + 22], faceData[offset + 23], faceData[offset + 24], uv, faceLights, oldFaceLights);
                     }
 
                     continue;
@@ -691,113 +534,83 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                             return "";
                         }
 
-                        if (el.Faces.TryGetValue(GetSourceFace(Vector3.UnitZ), out var fS)) {
+                        // dirX, dirY, dirZ, rx, ry, rz, ux, uy, uz, swapType(0=Swap,1=Pair), bIdx, bType(0=Min,1=Max), vIdx0..11, nx, ny, nz
+                        ReadOnlySpan<sbyte> modelData = [
 
-                            // South
-                            var uv = Registry.ResolveFaceUv(model, fS);
+                            // S-Face(Z+1)
+                            0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 5, 1, 0, 3, 5, 1, 3, 5, 1, 2, 5, 0, 2, 5, 0, 0, 1,
 
-                            if (!ShouldCull(uv.CullMask, pBlocks)) {
+                            // N-Face(Z-1)
+                            0, 0, -1, -1, 0, 0, 0, 1, 0, 0, 4, 0, 1, 3, 4, 0, 3, 4, 0, 2, 4, 1, 2, 4, 0, 0, -1,
 
-                                FillLights(x, y, z1 >= 0.999f ? z + 1 : z, 1, 0, 0, 0, 1, 0, faceLights2, pLight, pBlocks);
-                                Swap(faceLights2);
+                            // U-Face(Y+1)
+                            0, 1, 0, 1, 0, 0, 0, 0, -1, 0, 3, 1, 0, 3, 4, 1, 3, 4, 1, 3, 5, 0, 3, 5, 0, 1, 0,
 
-                                var oldFaceLights2 = new ushort[4];
-                                FillLights(x, y, z1 >= 0.999f ? z + 1 : z, 1, 0, 0, 0, 1, 0, oldFaceLights2, pOldLight, pBlocks, true);
-                                Swap(oldFaceLights2);
+                            // D-Face(Y-1)
+                            0, -1, 0, 1, 0, 0, 0, 0, 1, 1, 2, 0, 1, 2, 4, 0, 2, 4, 0, 2, 5, 1, 2, 5, 0, -1, 0,
 
-                                AddFace(targetMesh, x, y, z, x0, y1, z1, x1, y1, z1, x1, y0, z1, x0, y0, z1, 0, 0, 1, uv, faceLights2, oldFaceLights2);
+                            // E-Face(X+1)
+                            1, 0, 0, 0, 0, -1, 0, 1, 0, 0, 1, 1, 1, 3, 5, 1, 3, 4, 1, 2, 4, 1, 2, 5, 1, 0, 0,
+
+                            // W-Face(X-1)
+                            -1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 3, 4, 0, 3, 5, 0, 2, 5, 0, 2, 4, -1, 0, 0
+                        ];
+
+                        Span<float> bounds = [x0, x1, y0, y1, z0, z1];
+                        const int mStride = 27;
+
+                        for (var i = 0; i < 6; i++) {
+
+                            var off = i * mStride;
+                            var dir = new Vector3(modelData[off], modelData[off + 1], modelData[off + 2]);
+
+                            if (!el.Faces.TryGetValue(GetSourceFace(dir), out var face)) continue;
+
+                            var uv = Registry.ResolveFaceUv(model, face);
+
+                            if (ShouldCull(uv.CullMask, pBlocks)) continue;
+
+                            var bIdx = modelData[off + 10];
+                            var bType = modelData[off + 11]; // 0: <= 0.001, 1: >= 0.999
+                            var isOnBoundary = bType == 1 ? bounds[bIdx] >= 0.999f : bounds[bIdx] <= 0.001f;
+
+                            var rx = modelData[off + 3];
+                            var ry = modelData[off + 4];
+                            var rz = modelData[off + 5];
+                            var ux = modelData[off + 6];
+                            var uy = modelData[off + 7];
+                            var uz = modelData[off + 8];
+
+                            var lx = x + (int)dir.X;
+                            var ly = y + (int)dir.Y;
+                            var lz = z + (int)dir.Z;
+
+                            if (!isOnBoundary) {
+
+                                lx = x;
+                                ly = y;
+                                lz = z;
                             }
-                        }
 
-                        if (el.Faces.TryGetValue(GetSourceFace(-Vector3.UnitZ), out var fN)) {
+                            FillLights(lx, ly, lz, rx, ry, rz, ux, uy, uz, faceLights2, pLight, pBlocks);
 
-                            // North
-                            var uv = Registry.ResolveFaceUv(model, fN);
-
-                            if (!ShouldCull(uv.CullMask, pBlocks)) {
-
-                                FillLights(x, y, z0 <= 0.001f ? z - 1 : z, -1, 0, 0, 0, 1, 0, faceLights2, pLight, pBlocks);
-                                Swap(faceLights2);
-
-                                var oldFaceLights2 = new ushort[4];
-                                FillLights(x, y, z0 <= 0.001f ? z - 1 : z, -1, 0, 0, 0, 1, 0, oldFaceLights2, pOldLight, pBlocks, true);
-                                Swap(oldFaceLights2);
-
-                                AddFace(targetMesh, x, y, z, x1, y1, z0, x0, y1, z0, x0, y0, z0, x1, y0, z0, 0, 0, -1, uv, faceLights2, oldFaceLights2);
-
-                            }
-                        }
-
-                        if (el.Faces.TryGetValue(GetSourceFace(Vector3.UnitY), out var fU)) {
-
-                            // Up
-                            var uv = Registry.ResolveFaceUv(model, fU);
-
-                            if (!ShouldCull(uv.CullMask, pBlocks)) {
-
-                                FillLights(x, y1 >= 0.999f ? y + 1 : y, z, 1, 0, 0, 0, 0, -1, faceLights2, pLight, pBlocks);
-                                Swap(faceLights2);
-
-                                var oldFaceLights2 = new ushort[4];
-                                FillLights(x, y1 >= 0.999f ? y + 1 : y, z, 1, 0, 0, 0, 0, -1, oldFaceLights2, pOldLight, pBlocks, true);
-                                Swap(oldFaceLights2);
-
-                                AddFace(targetMesh, x, y, z, x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, 0, 1, 0, uv, faceLights2, oldFaceLights2);
-                            }
-                        }
-
-                        if (el.Faces.TryGetValue(GetSourceFace(-Vector3.UnitY), out var fD)) {
-
-                            // Down
-                            var uv = Registry.ResolveFaceUv(model, fD);
-
-                            if (!ShouldCull(uv.CullMask, pBlocks)) {
-
-                                FillLights(x, y0 <= 0.001f ? y - 1 : y, z, 1, 0, 0, 0, 0, 1, faceLights2, pLight, pBlocks);
+                            if (modelData[off + 9] == 1)
                                 SwapPairs(faceLights2);
+                            else
+                                Swap(faceLights2);
 
-                                var oldFaceLights2 = new ushort[4];
-                                FillLights(x, y0 <= 0.001f ? y - 1 : y, z, 1, 0, 0, 0, 0, 1, oldFaceLights2, pOldLight, pBlocks, true);
+                            var oldFaceLights2 = new ushort[4];
+
+                            FillLights(lx, ly, lz, rx, ry, rz, ux, uy, uz, oldFaceLights2, pOldLight, pBlocks, true);
+
+                            if (modelData[off + 9] == 1)
                                 SwapPairs(oldFaceLights2);
-
-                                AddFace(targetMesh, x, y, z, x1, y0, z0, x0, y0, z0, x0, y0, z1, x1, y0, z1, 0, -1, 0, uv, faceLights2, oldFaceLights2);
-                            }
-                        }
-
-                        if (el.Faces.TryGetValue(GetSourceFace(Vector3.UnitX), out var fE)) {
-
-                            // East
-                            var uv = Registry.ResolveFaceUv(model, fE);
-
-                            if (!ShouldCull(uv.CullMask, pBlocks)) {
-
-                                FillLights(x1 >= 0.999f ? x + 1 : x, y, z, 0, 0, -1, 0, 1, 0, faceLights2, pLight, pBlocks);
-                                Swap(faceLights2);
-
-                                var oldFaceLights2 = new ushort[4];
-                                FillLights(x1 >= 0.999f ? x + 1 : x, y, z, 0, 0, -1, 0, 1, 0, oldFaceLights2, pOldLight, pBlocks, true);
+                            else
                                 Swap(oldFaceLights2);
 
-                                AddFace(targetMesh, x, y, z, x1, y1, z1, x1, y1, z0, x1, y0, z0, x1, y0, z1, 1, 0, 0, uv, faceLights2, oldFaceLights2);
-                            }
-                        }
-
-                        if (el.Faces.TryGetValue(GetSourceFace(-Vector3.UnitX), out var fW)) {
-
-                            // West
-                            var uv = Registry.ResolveFaceUv(model, fW);
-
-                            if (!ShouldCull(uv.CullMask, pBlocks)) {
-
-                                FillLights(x0 <= 0.001f ? x - 1 : x, y, z, 0, 0, 1, 0, 1, 0, faceLights2, pLight, pBlocks);
-                                Swap(faceLights2);
-
-                                var oldFaceLights2 = new ushort[4];
-                                FillLights(x0 <= 0.001f ? x - 1 : x, y, z, 0, 0, 1, 0, 1, 0, oldFaceLights2, pOldLight, pBlocks, true);
-                                Swap(oldFaceLights2);
-
-                                AddFace(targetMesh, x, y, z, x0, y1, z0, x0, y1, z1, x0, y0, z1, x0, y0, z0, -1, 0, 0, uv, faceLights2, oldFaceLights2);
-                            }
+                            // AddFace
+                            var vOff = off + 12;
+                            AddFace(targetMesh, x, y, z, bounds[modelData[vOff]], bounds[modelData[vOff + 1]], bounds[modelData[vOff + 2]], bounds[modelData[vOff + 3]], bounds[modelData[vOff + 4]], bounds[modelData[vOff + 5]], bounds[modelData[vOff + 6]], bounds[modelData[vOff + 7]], bounds[modelData[vOff + 8]], bounds[modelData[vOff + 9]], bounds[modelData[vOff + 10]], bounds[modelData[vOff + 11]], modelData[vOff + 12], modelData[vOff + 13], modelData[vOff + 14], uv, faceLights2, oldFaceLights2);
                         }
                     } else {
 
@@ -1242,7 +1055,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 }
 
                 if (_vListsTrans != null) {
-                    
+
                     foreach (var l in _vListsTrans) ListPool<float>.Return(l);
                     foreach (var l in _nListsTrans!) ListPool<float>.Return(l);
                     foreach (var l in _tListsTrans!) ListPool<float>.Return(l);
@@ -1269,7 +1082,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
     private static void Flush(MeshBuilder b, List<List<float>> v, List<List<float>> n, List<List<float>> t, List<List<byte>> c, List<ushort[]> i, List<List<float>> vT, List<List<float>> nT, List<List<float>> tT, List<List<byte>> cT, List<ushort[]> iT) {
 
         if (b.Opaque.Verts.Count > 0) {
-            
+
             v.Add(b.Opaque.Verts);
             n.Add(b.Opaque.Norms);
             t.Add(b.Opaque.Uvs);
@@ -1284,7 +1097,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         }
 
         if (b.Transparent.Verts.Count > 0) {
-            
+
             vT.Add(b.Transparent.Verts);
             nT.Add(b.Transparent.Norms);
             tT.Add(b.Transparent.Uvs);
@@ -1370,7 +1183,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         }
 
         for (var k = 0; k < 4; k++) {
-            
+
             var light = lights[k];
             var oldLight = oldLights[k];
             mesh.Colors.Add((byte)(light & 0xFF));
@@ -1463,7 +1276,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
         // Update render light history
         if (_renderLight != null && _light != null) {
-            
+
             Array.Copy(_light, _renderLight, Volume);
         }
 
@@ -1474,7 +1287,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         void UploadList(List<List<float>> vs, List<List<float>> ns, List<List<float>> ts, List<List<byte>> cs, List<ushort[]> isIndices, List<Mesh> targetList) {
 
             for (var i = 0; i < vs.Count; i++) {
-                
+
                 var vList = vs[i];
                 var nList = ns[i];
                 var tList = ts[i];
@@ -1553,7 +1366,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         return;
 
         void FreeMesh(Mesh mesh) {
-            
+
             var copy = mesh;
             copy.Vertices = null;
             copy.Normals = null;
