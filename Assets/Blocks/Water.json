@@ -1,0 +1,7 @@
+{
+    "Model": "WaterLevel16",
+    "Solid": false,
+    "Opaque": false,
+    "Connect": "Water",
+    "NotSimple": true
+}

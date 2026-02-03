@@ -2,7 +2,8 @@
 
 // ReSharper disable ClassNeverInstantiated.Global
 // ReSharper disable CollectionNeverUpdated.Global
-// ReSharper disable  UnusedAutoPropertyAccessor.Global
+// ReSharper disable UnusedAutoPropertyAccessor.Global
+
 internal class ModelFaceJson {
 
     [JsonPropertyName("texture")] public string Texture { get; set; } = ""; // e.g., "#1" or "#particle"

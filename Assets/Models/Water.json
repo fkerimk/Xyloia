@@ -1,0 +1,6 @@
+{
+	"textures": {
+		"water": "Textures/Water",
+		"particle": "#water"
+	}
+}

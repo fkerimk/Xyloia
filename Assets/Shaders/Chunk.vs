@@ -12,11 +12,13 @@ uniform mat4 matModel;
 
 
 uniform float animTime;
+uniform float meshTime;
 uniform float unloadTimer;
 
 // Output vertex attributes (to fragment shader)
 out vec2 fragTexCoord;
 out vec4 fragColor;
+out vec4 fragLight;
 
 void main() {
     
@@ -24,9 +26,11 @@ void main() {
     float alpha = 1.0;
     float animSpeed = 4.0;
 
+    // Use animTime ONLY for alpha fade-in (persistent since chunk creation)
     if (animTime < 1.0 / animSpeed) {
         alpha = clamp(animTime * animSpeed, 0.0, 1.0);
     }
+
     
     if (unloadTimer > 0.0) {
         float fadeOut = 1.0 - clamp(unloadTimer * animSpeed, 0.0, 1.0);
@@ -40,37 +44,32 @@ void main() {
     // Combine to get the original ushort light value
     int light = valR | (valG << 8);
 
-    // Extract channels (4 bits each)
-    int r = (light & 0xF);
-    int g = ((light >> 4) & 0xF);
-    int b = ((light >> 8) & 0xF);
-    int s = ((light >> 12) & 0xF);
+    int valB = int(round(vertexColor.b * 255.0));
+    int valA = int(round(vertexColor.a * 255.0));
+    int oldLight = valB | (valA << 8);
+
+    // Fade between old and new light over 0.1s (speed 10)
+    float t = clamp(meshTime * 10.0, 0.0, 1.0);
+
+    // If chunk is recently spawned (animTime < 0.1s), skip light fade-in
+    if (animTime < 0.1) {
+        t = 1.0;
+    }
+
+    // Extract channels (4 bits each) and interpolate
+    float r = mix(float(oldLight & 0xF), float(light & 0xF), t);
+    float g = mix(float((oldLight >> 4) & 0xF), float((light >> 4) & 0xF), t);
+    float b = mix(float((oldLight >> 8) & 0xF), float((light >> 8) & 0xF), t);
+    float s = mix(float((oldLight >> 12) & 0xF), float((light >> 12) & 0xF), t);
 
     // Calculate World Position
     vec4 worldPos = matModel * vec4(vertexPosition, 1.0);
     
-    float fR = float(r);
-    float fG = float(g);
-    float fB = float(b);
-    float fS = float(s);
+    // Pass interpolated light levels to fragment shader (0..15)
+    fragLight = vec4(r, g, b, s);
 
-    float rlf = pow(0.85, 15.0 - fR);
-    float glf = pow(0.85, 15.0 - fG);
-    float blf = pow(0.85, 15.0 - fB);
-    float slf = pow(0.85, 15.0 - fS);
-
-    // Combine with Sky Light (s)
-    float cr = max(rlf, slf);
-    float cg = max(glf, slf);
-    float cb = max(blf, slf);
-    
-    // Minimum brightness
-    cr = max(cr, 0.05);
-    cg = max(cg, 0.05);
-    cb = max(cb, 0.05);
-
-    // Pass final color to fragment shader
-    fragColor = vec4(cr, cg, cb, alpha);
+    // Pass Alpha in fragColor
+    fragColor = vec4(1.0, 1.0, 1.0, alpha);
     
     fragTexCoord = vertexTexCoord;
     gl_Position = mvp * vec4(vertexPosition, 1.0);

@@ -3,7 +3,6 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using Raylib_cs;
 using static Raylib_cs.Raylib;
-using Xyloia;
 
 // ReSharper disable InconsistentNaming
 internal class Chunk(int x, int y, int z) : IDisposable {
@@ -17,42 +16,61 @@ internal class Chunk(int x, int y, int z) : IDisposable {
     public readonly int X = x, Y = y, Z = z;
 
     public double SpawnTime;
+    public double MeshBuildTime;
     public double UnloadTime;
 
     public readonly List<Mesh> Meshes = [];
+    public readonly List<Mesh> TransparentMeshes = [];
     public readonly List<int> LightEmitters = [];
 
-    private ushort[]? _light = System.Buffers.ArrayPool<ushort>.Shared.Rent(Volume);
+    private ushort[]? _light = RentAndClear<ushort>(Volume);
+    private ushort[]? _renderLight = RentAndClear<ushort>(Volume);
     private List<List<float>>? _vLists, _nLists, _tLists;
     private List<List<byte>>? _cLists;
     private List<ushort[]>? _iLists;
 
-    private readonly Block[]? _blocks = System.Buffers.ArrayPool<Block>.Shared.Rent(Volume);
+    private List<List<float>>? _vListsTrans, _nListsTrans, _tListsTrans;
+    private List<List<byte>>? _cListsTrans;
+    private List<ushort[]>? _iListsTrans;
+
+    private readonly Block[]? _blocks = RentAndClear<Block>(Volume);
+
     private static readonly ThreadLocal<MeshBuilder> Builder = new(() => new MeshBuilder());
 
     private readonly Lock _lock = new();
 
     private class MeshBuilder {
 
-        public List<float> Verts = new(4096);
-        public List<float> Norms = new(4096);
-        public List<float> Uvs = new(2048);
-        public List<byte> Colors = new(4096);
-        public readonly List<ushort> Tris = new(2048);
+        public readonly SubBuilder Opaque = new();
+        public readonly SubBuilder Transparent = new();
 
         public readonly Queue<(int x, int y, int z)> BfsQueue = new();
         public readonly HashSet<(int x, int y, int z)> BfsVisited = [];
 
-        public ushort VIdx;
-
         public void Clear() {
+            
+            Opaque.Clear();
+            Transparent.Clear();
+        }
 
-            Verts.Clear();
-            Norms.Clear();
-            Uvs.Clear();
-            Colors.Clear();
-            Tris.Clear();
-            VIdx = 0;
+        public class SubBuilder {
+
+            public List<float> Verts = new(4096);
+            public List<float> Norms = new(4096);
+            public List<float> Uvs = new(2048);
+            public List<byte> Colors = new(4096);
+            public readonly List<ushort> Tris = new(2048);
+            public ushort VIdx;
+
+            public void Clear() {
+                
+                Verts.Clear();
+                Norms.Clear();
+                Uvs.Clear();
+                Colors.Clear();
+                Tris.Clear();
+                VIdx = 0;
+            }
         }
     }
 
@@ -86,6 +104,13 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         IsDirty = true;
     }
 
+    public ushort GetOldLight(int x, int y, int z) {
+
+        if (_renderLight == null || x < 0 || x >= Width || y < 0 || y >= Height || z < 0 || z >= Depth) return 0;
+
+        return _renderLight[(x * Depth + z) * Height + y];
+    }
+
     private volatile bool _disposed;
 
     private static class ListPool<T> {
@@ -104,6 +129,14 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         public static void Return(List<T> list) => Queue.Enqueue(list);
     }
 
+    private static T[] RentAndClear<T>(int size) {
+        
+        var arr = System.Buffers.ArrayPool<T>.Shared.Rent(size);
+        Array.Clear(arr, 0, arr.Length);
+
+        return arr;
+    }
+
     public unsafe void Generate() {
 
         if (_disposed || _blocks == null) return;
@@ -119,6 +152,13 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
             var ptr = pBlocks;
             var idx = 0;
+            var bScale = config.Bedrock.Scale;
+
+            // Biome Setup
+            var biomes = config.Biomes.List.OrderByDescending(b => b.Threshold).ToList();
+            var biomeScale = config.Biomes.Scale;
+            var waterLevel = config.General.WaterLevel;
+            var waterId = Registry.GetId("Water");
 
             for (var lx = 0; lx < Width; lx++) {
 
@@ -128,11 +168,141 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                     float worldZ = Z * Depth + lz;
 
-                    // Improved Height Calculation - Base Continental Noise
-                    var height = (int)(t.BaseHeight + (Noise.Perlin2D(worldX * (float)t.Scale, worldZ * (float)t.Scale) + 0.1) * t.HeightAmplitude);
+                    // Biome selection & blending
+                    var biomeVal = Noise.Perlin2D(worldX * (float)biomeScale, worldZ * (float)biomeScale);
 
-                    // Detail / Roughness
-                    height += (int)(Noise.Perlin2D(worldX * (float)t.DetailScale, worldZ * (float)t.DetailScale) * t.DetailAmplitude);
+                    var b1 = biomes[^1]; // Fallback to lowest
+                    var b2 = biomes[^1];
+                    float tBlend = 0; // 0 = b1, 1 = b2
+
+                    // Find where we are
+                    var found = false;
+                    const float blendRadius = 0.05f;
+
+                    for (var i = 0; i < biomes.Count; i++) {
+                        
+                        var bHigh = biomes[i];
+
+                        if (i == biomes.Count - 1) {
+                            
+                            // Lowest biome
+                            b1 = bHigh;
+                            b2 = bHigh;
+                            tBlend = 0;
+                            found = true;
+
+                            break;
+                        }
+
+                        var threshold = bHigh.Threshold;
+
+                        // Check if we are in the pure range of bHigh (above blend zone)
+                        if (biomeVal > threshold + blendRadius) {
+                            
+                            b1 = bHigh;
+                            b2 = bHigh;
+                            tBlend = 1.0f;
+                            found = true;
+
+                            break;
+                        }
+
+                        // Check if we are in the blend zone (between bHigh and the one below it)
+                        if (biomeVal > threshold - blendRadius) {
+                            
+                            b1 = biomes[i + 1]; // Lower biome
+                            b2 = bHigh;         // Higher biome
+
+                            // Map biomeVal from [threshold - blend, threshold + blend] to 0..1
+                            tBlend = (float)((biomeVal - (threshold - blendRadius)) / (2 * blendRadius));
+                            found = true;
+
+                            break;
+                        }
+                    }
+
+                    if (!found) {
+                        
+                        // Should technically be covered by the loop, but safety
+                        b1 = biomes[^1];
+                        b2 = biomes[^1];
+                    }
+
+                    // Interpolate terrain settings
+                    var finalBaseHeight = (int)float.Lerp(b1.BaseHeight, b2.BaseHeight, tBlend);
+                    var finalAmp = (int)float.Lerp(b1.HeightAmplitude, b2.HeightAmplitude, tBlend);
+
+                    // Natural terrain
+                    float noiseHeight = 0;
+                    float amplitude = 1;
+                    float frequency = 1;
+                    float totalAmplitude = 0;
+
+                    for (var i = 0; i < t.Octaves; i++) {
+                        
+                        noiseHeight += Noise.Perlin2D(worldX * (float)t.Scale * frequency, worldZ * (float)t.Scale * frequency) * amplitude;
+                        totalAmplitude += amplitude;
+
+                        amplitude *= (float)t.Persistence;
+                        frequency *= (float)t.Lacunarity;
+                    }
+
+                    // Normalize
+                    noiseHeight /= totalAmplitude;
+
+                    // Apply interpolated biome settings
+                    var height = (int)(finalBaseHeight + noiseHeight * finalAmp);
+
+                    // Bedrock height
+                    var bedrockH = (int)(config.Bedrock.MinHeight + (Noise.Perlin2D(worldX * (float)bScale, worldZ * (float)bScale) + 1f) * 0.5f * (config.Bedrock.MaxHeight - config.Bedrock.MinHeight));
+
+                    // Block selection (Coherent Noise Blending)
+                    byte surfId;
+                    byte subId;
+
+                    // Clustered noise for blending (Scale 0.1 means ~10 block blobs)
+                    var blendNoise = (Noise.Perlin2D(worldX * 0.1f, worldZ * 0.1f) + 1f) * 0.5f;
+
+                    // Modulate tBlend with noise to create organic borders
+                    const float spread = 0.4f;
+                    var modulatedT = tBlend + (blendNoise - 0.5f) * spread;
+
+                    // Transition Block Logic (e.g. GrassSnow between Plains and Mountains)
+                    if (b2.TransitionBlockId != 0 && tBlend is > 0.05f and < 0.95f) {
+
+                        // We want a band of TransitionBlock around the center
+                        const float bandWidth = 0.35f; // Width of the transition strip
+
+                        switch (modulatedT) {
+                            
+                            case > 0.5f - bandWidth / 2 and < 0.5f + bandWidth / 2:
+                                
+                                surfId = b2.TransitionBlockId;
+                                subId = b2.SubSurfaceBlockId;
+
+                                break;
+                            
+                            case >= 0.5f + bandWidth / 2:
+                                
+                                surfId = b2.SurfaceBlockId;
+                                subId = b2.SubSurfaceBlockId;
+
+                                break;
+                            
+                            default:
+                                surfId = b1.SurfaceBlockId;
+                                subId = b1.SubSurfaceBlockId;
+
+                                break;
+                        }
+
+                    } else {
+                        
+                        // Standard 2-way blend
+                        var useSecondary = modulatedT > 0.5f;
+                        surfId = useSecondary ? b2.SurfaceBlockId : b1.SurfaceBlockId;
+                        subId = useSecondary ? b2.SubSurfaceBlockId : b1.SubSurfaceBlockId;
+                    }
 
                     for (var ly = 0; ly < Height; ly++) {
 
@@ -140,39 +310,47 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                         byte blockId = 0;
 
-                        if (ly <= height) {
+                        if (ly <= bedrockH) {
+                            
+                            blockId = config.Bedrock.BlockId;
+                            
+                        } else if (ly <= height) {
 
-                            var depth = height - ly;
-                            var accDepth = 0;
+                            // Surface / Biome Blocks
+                            if (ly == height)
+                                blockId = surfId;
+                            else if (ly >= height - 3)
+                                blockId = subId;
+                            else
+                                blockId = layers.Count > 0 ? layers[^1].BlockId : (byte)1; // Deepest layer or Stone
 
-                            // Layer Logic
-                            foreach (var layer in layers) {
-                                if (depth < accDepth + layer.Depth) {
-                                    blockId = layer.BlockId;
-
-                                    break;
-                                }
-
-                                accDepth += layer.Depth;
-                            }
-
-                            // If no layer matched (ran out), use the last one (Deepest)
-                            if (blockId == 0 && layers.Count > 0) blockId = layers[^1].BlockId;
-
-                            // 3D Noise Caves
+                            // 4. Caves
                             if (c.Enabled && blockId != 0 && ly < height - 2) {
 
-                                // Keep top 2 layers safe from caves? Or just raw? User prefers raw usually.
                                 float worldY = Y * Height + ly;
-                                var caveVal = Noise.Perlin3D(worldX * (float)c.ScaleX, worldY * (float)c.ScaleY, worldZ * (float)c.ScaleZ);
+
+                                float caveVal = 0;
+                                float cAmp = 1;
+                                float cFreq = 1;
+
+                                for (var ci = 0; ci < c.Octaves; ci++) {
+                                    caveVal += Noise.Perlin3D(worldX * (float)c.ScaleX * cFreq, worldY * (float)c.ScaleY * cFreq, worldZ * (float)c.ScaleZ * cFreq) * cAmp;
+                                    cAmp *= 0.5f;
+                                    cFreq *= 2.0f;
+                                }
+
                                 if (caveVal > c.Threshold) blockId = 0;
                             }
+                            
+                        } else if (ly <= waterLevel) {
+                            
+                            blockId = waterId;
                         }
 
                         *ptr++ = new Block(blockId);
 
                         if (blockId > 0) {
-
+                            
                             var lum = Registry.GetLuminance(blockId);
                             if (lum.R > 0 || lum.G > 0 || lum.B > 0) LightEmitters.Add(idx);
                         }
@@ -201,8 +379,15 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         var newCLists = new List<List<byte>>();
         var newILists = new List<ushort[]>();
 
+        var newVListsTrans = new List<List<float>>();
+        var newNListsTrans = new List<List<float>>();
+        var newTListsTrans = new List<List<float>>();
+        var newCListsTrans = new List<List<byte>>();
+        var newIListsTrans = new List<ushort[]>();
+
         fixed (Block* pBlocks = _blocks)
-        fixed (ushort* pLight = _light) {
+        fixed (ushort* pLight = _light)
+        fixed (ushort* pOldLight = _renderLight) {
 
             for (var x = 0; x < Width; x++)
             for (var z = 0; z < Depth; z++)
@@ -210,7 +395,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                 if (_disposed) return;
 
-                if (builder.VIdx > 60000) Flush(builder, newVLists, newNLists, newTLists, newCLists, newILists);
+                if (builder.Opaque.VIdx > 60000 || builder.Transparent.VIdx > 60000) Flush(builder, newVLists, newNLists, newTLists, newCLists, newILists, newVListsTrans, newNListsTrans, newTListsTrans, newCListsTrans, newIListsTrans);
 
                 var idx = (x * Depth + z) * Height + y;
 
@@ -221,6 +406,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                 // Optimization: If a block (Simple or Complex) is fully surrounded by Opaque blocks, don't draw it.
                 if (IsHidden(x, y, z, pBlocks)) continue;
+
+                var isTrans = !block.Opaque;
+                var targetMesh = isTrans ? builder.Transparent : builder.Opaque;
 
                 if (Registry.IsSimple(block.Id) && block.Data == 0) {
 
@@ -238,7 +426,17 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                             FillLights(x, y, z - 1, -1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
 
                         Swap(faceLights);
-                        AddFace(builder, x, y, z, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, uv, faceLights);
+
+                        var oldFaceLights = new ushort[4];
+                        
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
+                            FillLightsSimple(idx - Height, -1, 0, 0, 0, 1, 0, oldFaceLights, pOldLight, pBlocks);
+                        else
+                            FillLights(x, y, z - 1, -1, 0, 0, 0, 1, 0, oldFaceLights, pOldLight, pBlocks, true);
+
+                        Swap(oldFaceLights);
+
+                        AddFace(targetMesh, x, y, z, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, uv, faceLights, oldFaceLights);
                     }
 
                     // South (Z+1) | Face 2
@@ -252,7 +450,17 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                             FillLights(x, y, z + 1, 1, 0, 0, 0, 1, 0, faceLights, pLight, pBlocks);
 
                         Swap(faceLights);
-                        AddFace(builder, x, y, z, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, uv, faceLights);
+
+                        var oldFaceLights = new ushort[4];
+                        
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
+                            FillLightsSimple(idx + Height, 1, 0, 0, 0, 1, 0, oldFaceLights, pOldLight, pBlocks);
+                        else
+                            FillLights(x, y, z + 1, 1, 0, 0, 0, 1, 0, oldFaceLights, pOldLight, pBlocks, true);
+
+                        Swap(oldFaceLights);
+
+                        AddFace(targetMesh, x, y, z, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, uv, faceLights, oldFaceLights);
                     }
 
                     // East (X+1) | Face 1
@@ -266,7 +474,17 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                             FillLights(x + 1, y, z, 0, 0, -1, 0, 1, 0, faceLights, pLight, pBlocks);
 
                         Swap(faceLights);
-                        AddFace(builder, x, y, z, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, uv, faceLights);
+
+                        var oldFaceLights = new ushort[4];
+                        
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
+                            FillLightsSimple(idx + Depth * Height, 0, 0, -1, 0, 1, 0, oldFaceLights, pOldLight, pBlocks);
+                        else
+                            FillLights(x + 1, y, z, 0, 0, -1, 0, 1, 0, oldFaceLights, pOldLight, pBlocks, true);
+
+                        Swap(oldFaceLights);
+
+                        AddFace(targetMesh, x, y, z, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, uv, faceLights, oldFaceLights);
                     }
 
                     // West (X-1) | Face 3
@@ -280,7 +498,16 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                             FillLights(x - 1, y, z, 0, 0, 1, 0, 1, 0, faceLights, pLight, pBlocks);
 
                         Swap(faceLights);
-                        AddFace(builder, x, y, z, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, -1, 0, 0, uv, faceLights);
+
+                        var oldFaceLights = new ushort[4];
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
+                            FillLightsSimple(idx - Depth * Height, 0, 0, 1, 0, 1, 0, oldFaceLights, pOldLight, pBlocks);
+                        else
+                            FillLights(x - 1, y, z, 0, 0, 1, 0, 1, 0, oldFaceLights, pOldLight, pBlocks, true);
+
+                        Swap(oldFaceLights);
+
+                        AddFace(targetMesh, x, y, z, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, -1, 0, 0, uv, faceLights, oldFaceLights);
                     }
 
                     // Up (Y+1) | Face 4
@@ -296,8 +523,17 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                         Swap(faceLights);
 
+                        var oldFaceLights = new ushort[4];
+                        
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
+                            FillLightsSimple(idx + 1, 1, 0, 0, 0, 0, -1, oldFaceLights, pOldLight, pBlocks);
+                        else
+                            FillLights(x, y + 1, z, 1, 0, 0, 0, 0, -1, oldFaceLights, pOldLight, pBlocks, true);
+
+                        Swap(oldFaceLights);
+
                         // x0=0,y1=1,z0=0 ...
-                        AddFace(builder, x, y, z, 0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 0, uv, faceLights);
+                        AddFace(targetMesh, x, y, z, 0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 0, uv, faceLights, oldFaceLights);
                     }
 
                     // Down (Y-1) | Face 5
@@ -311,7 +547,16 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                             FillLights(x, y - 1, z, 1, 0, 0, 0, 0, 1, faceLights, pLight, pBlocks);
 
                         SwapPairs(faceLights);
-                        AddFace(builder, x, y, z, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, -1, 0, uv, faceLights);
+
+                        var oldFaceLights = new ushort[4];
+                        if (z is > 1 and < 14 && x is > 1 and < 14 && y is > 1 and < 254)
+                            FillLightsSimple(idx - 1, 1, 0, 0, 0, 0, 1, oldFaceLights, pOldLight, pBlocks);
+                        else
+                            FillLights(x, y - 1, z, 1, 0, 0, 0, 0, 1, oldFaceLights, pOldLight, pBlocks, true);
+
+                        SwapPairs(oldFaceLights);
+
+                        AddFace(targetMesh, x, y, z, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, -1, 0, uv, faceLights, oldFaceLights);
                     }
 
                     continue;
@@ -455,7 +700,12 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                                 FillLights(x, y, z1 >= 0.999f ? z + 1 : z, 1, 0, 0, 0, 1, 0, faceLights2, pLight, pBlocks);
                                 Swap(faceLights2);
-                                AddFace(builder, x, y, z, x0, y1, z1, x1, y1, z1, x1, y0, z1, x0, y0, z1, 0, 0, 1, uv, faceLights2);
+
+                                var oldFaceLights2 = new ushort[4];
+                                FillLights(x, y, z1 >= 0.999f ? z + 1 : z, 1, 0, 0, 0, 1, 0, oldFaceLights2, pOldLight, pBlocks, true);
+                                Swap(oldFaceLights2);
+
+                                AddFace(targetMesh, x, y, z, x0, y1, z1, x1, y1, z1, x1, y0, z1, x0, y0, z1, 0, 0, 1, uv, faceLights2, oldFaceLights2);
                             }
                         }
 
@@ -468,7 +718,13 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                                 FillLights(x, y, z0 <= 0.001f ? z - 1 : z, -1, 0, 0, 0, 1, 0, faceLights2, pLight, pBlocks);
                                 Swap(faceLights2);
-                                AddFace(builder, x, y, z, x1, y1, z0, x0, y1, z0, x0, y0, z0, x1, y0, z0, 0, 0, -1, uv, faceLights2);
+
+                                var oldFaceLights2 = new ushort[4];
+                                FillLights(x, y, z0 <= 0.001f ? z - 1 : z, -1, 0, 0, 0, 1, 0, oldFaceLights2, pOldLight, pBlocks, true);
+                                Swap(oldFaceLights2);
+
+                                AddFace(targetMesh, x, y, z, x1, y1, z0, x0, y1, z0, x0, y0, z0, x1, y0, z0, 0, 0, -1, uv, faceLights2, oldFaceLights2);
+
                             }
                         }
 
@@ -481,7 +737,12 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                                 FillLights(x, y1 >= 0.999f ? y + 1 : y, z, 1, 0, 0, 0, 0, -1, faceLights2, pLight, pBlocks);
                                 Swap(faceLights2);
-                                AddFace(builder, x, y, z, x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, 0, 1, 0, uv, faceLights2);
+
+                                var oldFaceLights2 = new ushort[4];
+                                FillLights(x, y1 >= 0.999f ? y + 1 : y, z, 1, 0, 0, 0, 0, -1, oldFaceLights2, pOldLight, pBlocks, true);
+                                Swap(oldFaceLights2);
+
+                                AddFace(targetMesh, x, y, z, x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, 0, 1, 0, uv, faceLights2, oldFaceLights2);
                             }
                         }
 
@@ -494,7 +755,12 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                                 FillLights(x, y0 <= 0.001f ? y - 1 : y, z, 1, 0, 0, 0, 0, 1, faceLights2, pLight, pBlocks);
                                 SwapPairs(faceLights2);
-                                AddFace(builder, x, y, z, x1, y0, z0, x0, y0, z0, x0, y0, z1, x1, y0, z1, 0, -1, 0, uv, faceLights2);
+
+                                var oldFaceLights2 = new ushort[4];
+                                FillLights(x, y0 <= 0.001f ? y - 1 : y, z, 1, 0, 0, 0, 0, 1, oldFaceLights2, pOldLight, pBlocks, true);
+                                SwapPairs(oldFaceLights2);
+
+                                AddFace(targetMesh, x, y, z, x1, y0, z0, x0, y0, z0, x0, y0, z1, x1, y0, z1, 0, -1, 0, uv, faceLights2, oldFaceLights2);
                             }
                         }
 
@@ -507,7 +773,12 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                                 FillLights(x1 >= 0.999f ? x + 1 : x, y, z, 0, 0, -1, 0, 1, 0, faceLights2, pLight, pBlocks);
                                 Swap(faceLights2);
-                                AddFace(builder, x, y, z, x1, y1, z1, x1, y1, z0, x1, y0, z0, x1, y0, z1, 1, 0, 0, uv, faceLights2);
+
+                                var oldFaceLights2 = new ushort[4];
+                                FillLights(x1 >= 0.999f ? x + 1 : x, y, z, 0, 0, -1, 0, 1, 0, oldFaceLights2, pOldLight, pBlocks, true);
+                                Swap(oldFaceLights2);
+
+                                AddFace(targetMesh, x, y, z, x1, y1, z1, x1, y1, z0, x1, y0, z0, x1, y0, z1, 1, 0, 0, uv, faceLights2, oldFaceLights2);
                             }
                         }
 
@@ -520,7 +791,12 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                                 FillLights(x0 <= 0.001f ? x - 1 : x, y, z, 0, 0, 1, 0, 1, 0, faceLights2, pLight, pBlocks);
                                 Swap(faceLights2);
-                                AddFace(builder, x, y, z, x0, y1, z0, x0, y1, z1, x0, y0, z1, x0, y0, z0, -1, 0, 0, uv, faceLights2);
+
+                                var oldFaceLights2 = new ushort[4];
+                                FillLights(x0 <= 0.001f ? x - 1 : x, y, z, 0, 0, 1, 0, 1, 0, oldFaceLights2, pOldLight, pBlocks, true);
+                                Swap(oldFaceLights2);
+
+                                AddFace(targetMesh, x, y, z, x0, y1, z0, x0, y1, z1, x0, y0, z1, x0, y0, z0, -1, 0, 0, uv, faceLights2, oldFaceLights2);
                             }
                         }
                     } else {
@@ -535,18 +811,18 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                         Matrix4x4? elRotMat = null;
 
                         if (el.Rotation != null) {
-                            
+
                             var origin = new Vector3(el.Rotation.Origin[0], el.Rotation.Origin[1], el.Rotation.Origin[2]) / 16f - new Vector3(0.5f);
-                            
+
                             var axis = el.Rotation.Axis switch {
-                                
+
                                 "x" => Vector3.UnitX,
                                 "y" => Vector3.UnitY,
                                 _   => Vector3.UnitZ
                             };
 
                             var angle = el.Rotation.Angle * (float)(Math.PI / 180.0);
-                            
+
                             elRotMat = Matrix4x4.CreateTranslation(-origin) * Matrix4x4.CreateFromAxisAngle(axis, angle) * Matrix4x4.CreateTranslation(origin);
                         }
 
@@ -613,7 +889,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
                             // Apply Element Rotation
                             if (elRotMat.HasValue) {
-                                
+
                                 p1 = Vector3.Transform(p1, elRotMat.Value);
                                 p2 = Vector3.Transform(p2, elRotMat.Value);
                                 p3 = Vector3.Transform(p3, elRotMat.Value);
@@ -635,8 +911,12 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                             // Fix light-vertex mapping (BL->TL, etc.)
                             Swap(faceLights2);
 
+                            var oldFaceLights2 = new ushort[4];
+                            FillLights(x, y, z, (int)Math.Round(vR.X), (int)Math.Round(vR.Y), (int)Math.Round(vR.Z), (int)Math.Round(vU.X), (int)Math.Round(vU.Y), (int)Math.Round(vU.Z), oldFaceLights2, pOldLight, pBlocks, true);
+                            Swap(oldFaceLights2);
+
                             // Use AddFace to handle UV rotation and Indexing correctly
-                            AddFace(builder, x, y, z, p1.X, p1.Y, p1.Z, p2.X, p2.Y, p2.Z, p3.X, p3.Y, p3.Z, p4.X, p4.Y, p4.Z, 0, 0, 0, faceUv, faceLights2);
+                            AddFace(targetMesh, x, y, z, p1.X, p1.Y, p1.Z, p2.X, p2.Y, p2.Z, p3.X, p3.Y, p3.Z, p4.X, p4.Y, p4.Z, 0, 0, 0, faceUv, faceLights2, oldFaceLights2);
                         }
                     }
                 }
@@ -738,26 +1018,26 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                     return AverageLight(l1, lA, lB, lC);
                 }
 
-                void FillLights(int lx, int ly, int lz, int rX, int rY, int rZ, int uX, int uY, int uZ, ushort[] output, ushort* pL, Block* pB) {
+                void FillLights(int lx, int ly, int lz, int rX, int rY, int rZ, int uX, int uY, int uZ, ushort[] output, ushort* pL, Block* pB, bool isOld = false) {
 
                     if (!QualitySettings.SmoothLighting) {
 
-                        var flat = GetLightSafe(lx, ly, lz, pL);
+                        var flat = GetLightSafe(lx, ly, lz, pL, isOld);
                         output[0] = output[1] = output[2] = output[3] = flat;
 
                         return;
                     }
 
                     // output[0]=BL, output[1]=BR, output[2]=TR, output[3]=TL
-                    output[0] = GetVertexLight(lx, ly, lz, -rX - uX, -rY - uY, -rZ - uZ, pL, pB);
-                    output[1] = GetVertexLight(lx, ly, lz, rX - uX, rY - uY, rZ - uZ, pL, pB);
-                    output[2] = GetVertexLight(lx, ly, lz, rX + uX, rY + uY, rZ + uZ, pL, pB);
-                    output[3] = GetVertexLight(lx, ly, lz, -rX + uX, -rY + uY, -rZ + uZ, pL, pB);
+                    output[0] = GetVertexLight(lx, ly, lz, -rX - uX, -rY - uY, -rZ - uZ, pL, pB, isOld);
+                    output[1] = GetVertexLight(lx, ly, lz, rX - uX, rY - uY, rZ - uZ, pL, pB, isOld);
+                    output[2] = GetVertexLight(lx, ly, lz, rX + uX, rY + uY, rZ + uZ, pL, pB, isOld);
+                    output[3] = GetVertexLight(lx, ly, lz, -rX + uX, -rY + uY, -rZ + uZ, pL, pB, isOld);
                 }
 
-                ushort GetVertexLight(int vx, int vy, int vz, int dx, int dy, int dz, ushort* pL, Block* pB) {
+                ushort GetVertexLight(int vx, int vy, int vz, int dx, int dy, int dz, ushort* pL, Block* pB, bool isOld = false) {
 
-                    var l1 = GetLightSafe(vx, vy, vz, pL);
+                    var l1 = GetLightSafe(vx, vy, vz, pL, isOld);
 
                     int ax, ay, az, bx, by, bz, cx, cy, cz;
 
@@ -798,8 +1078,8 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                         cz = vz;
                     }
 
-                    var lA = GetLightSafe(ax, ay, az, pL);
-                    var lB = GetLightSafe(bx, by, bz, pL);
+                    var lA = GetLightSafe(ax, ay, az, pL, isOld);
+                    var lB = GetLightSafe(bx, by, bz, pL, isOld);
 
                     // Occlusion
                     if (IsSolid(ax, ay, az, pB) && IsSolid(bx, by, bz, pB)) {
@@ -807,7 +1087,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                         return AverageLight(l1, lA, lB, l1);
                     }
 
-                    var lC = GetLightSafe(cx, cy, cz, pL);
+                    var lC = GetLightSafe(cx, cy, cz, pL, isOld);
 
                     return AverageLight(l1, lA, lB, lC);
                 }
@@ -822,7 +1102,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                     return (ushort)(((r + 2) >> 2) | (((g + 2) >> 2) << 4) | (((bl + 2) >> 2) << 8) | (((s + 2) >> 2) << 12));
                 }
 
-                ushort GetLightSafe(int cx, int cy, int cz, ushort* pL) {
+                ushort GetLightSafe(int cx, int cy, int cz, ushort* pL, bool isOld = false) {
 
                     if (cy is < 0 or >= Height) return 0; // Vertical limits (Sky/Void)
 
@@ -832,15 +1112,16 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                         >= 0 and < 16 when cz is >= 0 and < 16 => pL[(cx * 16 + cz) * 256 + cy],
 
                         // Diagonal & Neighbor Checks
-                        < 0 when cz < 0   => nxNz?.GetLight(cx + 16, cy, cz + 16) ?? 0,
-                        < 0 when cz >= 16 => nxPz?.GetLight(cx + 16, cy, cz - 16) ?? 0,
-                        < 0               => nx?.GetLight(cx + 16, cy, cz) ?? 0,
+                        < 0 when cz < 0   => (isOld ? nxNz?.GetOldLight(cx + 16, cy, cz + 16) : nxNz?.GetLight(cx + 16, cy, cz + 16)) ?? 0,
+                        < 0 when cz >= 16 => (isOld ? nxPz?.GetOldLight(cx + 16, cy, cz - 16) : nxPz?.GetLight(cx + 16, cy, cz - 16)) ?? 0,
+                        < 0               => (isOld ? nx?.GetOldLight(cx + 16, cy, cz) : nx?.GetLight(cx + 16, cy, cz)) ?? 0,
 
-                        >= 16 when cz < 0   => pxNz?.GetLight(cx - 16, cy, cz + 16) ?? 0,
-                        >= 16 when cz >= 16 => pxPz?.GetLight(cx - 16, cy, cz - 16) ?? 0,
-                        >= 16               => px?.GetLight(cx - 16, cy, cz) ?? 0,
+                        >= 16 when cz < 0   => (isOld ? pxNz?.GetOldLight(cx - 16, cy, cz + 16) : pxNz?.GetLight(cx - 16, cy, cz + 16)) ?? 0,
+                        >= 16 when cz >= 16 => (isOld ? pxPz?.GetOldLight(cx - 16, cy, cz - 16) : pxPz?.GetLight(cx - 16, cy, cz - 16)) ?? 0,
+                        >= 16               => (isOld ? px?.GetOldLight(cx - 16, cy, cz) : px?.GetLight(cx - 16, cy, cz)) ?? 0,
 
-                        _ => cz < 0 ? nz?.GetLight(cx, cy, cz + 16) ?? 0 : pz?.GetLight(cx, cy, cz - 16) ?? 0
+                        _ when cz < 0 => (isOld ? nz?.GetOldLight(cx, cy, cz + 16) : nz?.GetLight(cx, cy, cz + 16)) ?? 0,
+                        _ when true   => (isOld ? pz?.GetOldLight(cx, cy, cz - 16) : pz?.GetLight(cx, cy, cz - 16)) ?? 0,
                     };
                 }
 
@@ -922,8 +1203,7 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                     if (b.Opaque) return true;
                     if (b.Id == 0) return false;
 
-                    // Check if hidden (BFS).
-                    if (IsHidden(cx, cy, cz, pB)) return true;
+                    if (b.Id == block.Id) return true;
 
                     // Connection-based culling
                     if (Registry.CanConnect(block.Id, b.Id)) return true;
@@ -945,9 +1225,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                 bool IsSolid(int cx, int cy, int cz, Block* pB) => GetBlockSafe(cx, cy, cz, pB).Solid;
             }
 
-            Flush(builder, newVLists, newNLists, newTLists, newCLists, newILists);
+            Flush(builder, newVLists, newNLists, newTLists, newCLists, newILists, newVListsTrans, newNListsTrans, newTListsTrans, newCListsTrans, newIListsTrans);
 
-            if (newVLists.Count <= 0) return;
+            if (newVLists.Count <= 0 && newVListsTrans.Count <= 0) return;
 
             lock (_lock) {
 
@@ -961,35 +1241,65 @@ internal class Chunk(int x, int y, int z) : IDisposable {
                     foreach (var l in _cLists!) ListPool<byte>.Return(l);
                 }
 
+                if (_vListsTrans != null) {
+                    
+                    foreach (var l in _vListsTrans) ListPool<float>.Return(l);
+                    foreach (var l in _nListsTrans!) ListPool<float>.Return(l);
+                    foreach (var l in _tListsTrans!) ListPool<float>.Return(l);
+                    foreach (var l in _cListsTrans!) ListPool<byte>.Return(l);
+                }
+
                 _vLists = newVLists;
                 _nLists = newNLists;
                 _tLists = newTLists;
                 _cLists = newCLists;
                 _iLists = newILists;
+
+                _vListsTrans = newVListsTrans;
+                _nListsTrans = newNListsTrans;
+                _tListsTrans = newTListsTrans;
+                _cListsTrans = newCListsTrans;
+                _iListsTrans = newIListsTrans;
             }
 
             IsDirty = true;
         }
     }
 
-    private static void Flush(MeshBuilder b, List<List<float>> v, List<List<float>> n, List<List<float>> t, List<List<byte>> c, List<ushort[]> i) {
+    private static void Flush(MeshBuilder b, List<List<float>> v, List<List<float>> n, List<List<float>> t, List<List<byte>> c, List<ushort[]> i, List<List<float>> vT, List<List<float>> nT, List<List<float>> tT, List<List<byte>> cT, List<ushort[]> iT) {
 
-        if (b.Verts.Count == 0) return;
+        if (b.Opaque.Verts.Count > 0) {
+            
+            v.Add(b.Opaque.Verts);
+            n.Add(b.Opaque.Norms);
+            t.Add(b.Opaque.Uvs);
+            c.Add(b.Opaque.Colors);
+            i.Add(b.Opaque.Tris.ToArray());
+            b.Opaque.Verts = ListPool<float>.Rent();
+            b.Opaque.Norms = ListPool<float>.Rent();
+            b.Opaque.Uvs = ListPool<float>.Rent();
+            b.Opaque.Colors = ListPool<byte>.Rent();
+            b.Opaque.Tris.Clear();
+            b.Opaque.VIdx = 0;
+        }
 
-        v.Add(b.Verts);
-        n.Add(b.Norms);
-        t.Add(b.Uvs);
-        c.Add(b.Colors);
-        i.Add(b.Tris.ToArray());
-        b.Verts = ListPool<float>.Rent();
-        b.Norms = ListPool<float>.Rent();
-        b.Uvs = ListPool<float>.Rent();
-        b.Colors = ListPool<byte>.Rent();
-        b.Tris.Clear();
-        b.VIdx = 0;
+        if (b.Transparent.Verts.Count > 0) {
+            
+            vT.Add(b.Transparent.Verts);
+            nT.Add(b.Transparent.Norms);
+            tT.Add(b.Transparent.Uvs);
+            cT.Add(b.Transparent.Colors);
+            iT.Add(b.Transparent.Tris.ToArray());
+            b.Transparent.Verts = ListPool<float>.Rent();
+            b.Transparent.Norms = ListPool<float>.Rent();
+            b.Transparent.Uvs = ListPool<float>.Rent();
+            b.Transparent.Colors = ListPool<byte>.Rent();
+            b.Transparent.Tris.Clear();
+            b.Transparent.VIdx = 0;
+        }
     }
 
-    private static void AddFace(MeshBuilder mesh, float ox, float oy, float oz, float x1, float y1, float z1, float x2, float y2, float z2, float x3, float y3, float z3, float x4, float y4, float z4, float nx, float ny, float nz, UvInfo info, ushort[] lights) {
+    private static void AddFace(MeshBuilder.SubBuilder mesh, float ox, float oy, float oz, float x1, float y1, float z1, float x2, float y2, float z2, float x3, float y3, float z3, float x4, float y4, float z4, float nx, float ny, float nz, UvInfo info, ushort[] lights, ushort[] oldLights) {
 
         mesh.Verts.Add(ox + x1);
         mesh.Verts.Add(oy + y1);
@@ -1060,12 +1370,13 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         }
 
         for (var k = 0; k < 4; k++) {
-
+            
             var light = lights[k];
+            var oldLight = oldLights[k];
             mesh.Colors.Add((byte)(light & 0xFF));
             mesh.Colors.Add((byte)((light >> 8) & 0xFF));
-            mesh.Colors.Add(0);
-            mesh.Colors.Add(255);
+            mesh.Colors.Add((byte)(oldLight & 0xFF));
+            mesh.Colors.Add((byte)((oldLight >> 8) & 0xFF));
         }
 
         for (var k = 0; k < 4; k++) {
@@ -1104,11 +1415,15 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         mesh.VIdx += 4;
     }
 
-    public unsafe void Upload() {
+    public unsafe void Upload(double time) {
 
         List<List<float>>? vLists, nLists, tLists;
         List<List<byte>>? cLists;
         List<ushort[]>? iLists;
+
+        List<List<float>>? vListsT, nListsT, tListsT;
+        List<List<byte>>? cListsT;
+        List<ushort[]>? iListsT;
 
         lock (_lock) {
 
@@ -1123,51 +1438,79 @@ internal class Chunk(int x, int y, int z) : IDisposable {
             _tLists = null;
             _cLists = null;
             _iLists = null;
+
+            vListsT = _vListsTrans;
+            nListsT = _nListsTrans;
+            tListsT = _tListsTrans;
+            cListsT = _cListsTrans;
+            iListsT = _iListsTrans;
+
+            _vListsTrans = null;
+            _nListsTrans = null;
+            _tListsTrans = null;
+            _cListsTrans = null;
+            _iListsTrans = null;
         }
 
-        if (vLists == null) return;
+        if (vLists == null && vListsT == null) return;
 
         UnloadMeshGraphics();
 
-        for (var i = 0; i < vLists.Count; i++) {
+        if (vLists != null) UploadList(vLists, nLists!, tLists!, cLists!, iLists!, Meshes);
+        if (vListsT != null) UploadList(vListsT, nListsT!, tListsT!, cListsT!, iListsT!, TransparentMeshes);
 
-            var vList = vLists[i];
-            var nList = nLists![i];
-            var tList = tLists![i];
-            var cList = cLists![i];
-            var iArr = iLists![i];
+        MeshBuildTime = time;
 
-            var mesh = new Mesh {
-                VertexCount = vList.Count / 3,
-                TriangleCount = iArr.Length / 3,
-                Vertices = (float*)NativeMemory.Alloc((UIntPtr)(vList.Count * sizeof(float))),
-                Normals = (float*)NativeMemory.Alloc((UIntPtr)(nList.Count * sizeof(float))),
-                TexCoords = (float*)NativeMemory.Alloc((UIntPtr)(tList.Count * sizeof(float))),
-                Colors = (byte*)NativeMemory.Alloc((UIntPtr)(cList.Count * sizeof(byte))),
-                Indices = (ushort*)NativeMemory.Alloc((UIntPtr)(iArr.Length * sizeof(ushort)))
-            };
-
-            var vSpan = CollectionsMarshal.AsSpan(vList);
-            var nSpan = CollectionsMarshal.AsSpan(nList);
-            var tSpan = CollectionsMarshal.AsSpan(tList);
-            var cSpan = CollectionsMarshal.AsSpan(cList);
-
-            fixed (float* v = vSpan) Buffer.MemoryCopy(v, mesh.Vertices, vList.Count * 4, vList.Count * 4);
-            fixed (float* n = nSpan) Buffer.MemoryCopy(n, mesh.Normals, nList.Count * 4, nList.Count * 4);
-            fixed (float* t = tSpan) Buffer.MemoryCopy(t, mesh.TexCoords, tList.Count * 4, tList.Count * 4);
-            fixed (byte* c = cSpan) Buffer.MemoryCopy(c, mesh.Colors, cList.Count, cList.Count);
-            fixed (ushort* idx = iArr) Buffer.MemoryCopy(idx, mesh.Indices, iArr.Length * 2, iArr.Length * 2);
-
-            UploadMesh(ref mesh, false);
-            Meshes.Add(mesh);
-
-            ListPool<float>.Return(vList);
-            ListPool<float>.Return(nList);
-            ListPool<float>.Return(tList);
-            ListPool<byte>.Return(cList);
+        // Update render light history
+        if (_renderLight != null && _light != null) {
+            
+            Array.Copy(_light, _renderLight, Volume);
         }
 
         IsDirty = false;
+
+        return;
+
+        void UploadList(List<List<float>> vs, List<List<float>> ns, List<List<float>> ts, List<List<byte>> cs, List<ushort[]> isIndices, List<Mesh> targetList) {
+
+            for (var i = 0; i < vs.Count; i++) {
+                
+                var vList = vs[i];
+                var nList = ns[i];
+                var tList = ts[i];
+                var cList = cs[i];
+                var iArr = isIndices[i];
+
+                var mesh = new Mesh {
+                    VertexCount = vList.Count / 3,
+                    TriangleCount = iArr.Length / 3,
+                    Vertices = (float*)NativeMemory.Alloc((UIntPtr)(vList.Count * sizeof(float))),
+                    Normals = (float*)NativeMemory.Alloc((UIntPtr)(nList.Count * sizeof(float))),
+                    TexCoords = (float*)NativeMemory.Alloc((UIntPtr)(tList.Count * sizeof(float))),
+                    Colors = (byte*)NativeMemory.Alloc((UIntPtr)(cList.Count * sizeof(byte))),
+                    Indices = (ushort*)NativeMemory.Alloc((UIntPtr)(iArr.Length * sizeof(ushort)))
+                };
+
+                var vSpan = CollectionsMarshal.AsSpan(vList);
+                var nSpan = CollectionsMarshal.AsSpan(nList);
+                var tSpan = CollectionsMarshal.AsSpan(tList);
+                var cSpan = CollectionsMarshal.AsSpan(cList);
+
+                fixed (float* v = vSpan) Buffer.MemoryCopy(v, mesh.Vertices, vList.Count * 4, vList.Count * 4);
+                fixed (float* n = nSpan) Buffer.MemoryCopy(n, mesh.Normals, nList.Count * 4, nList.Count * 4);
+                fixed (float* t = tSpan) Buffer.MemoryCopy(t, mesh.TexCoords, tList.Count * 4, tList.Count * 4);
+                fixed (byte* c = cSpan) Buffer.MemoryCopy(c, mesh.Colors, cList.Count, cList.Count);
+                fixed (ushort* idx = iArr) Buffer.MemoryCopy(idx, mesh.Indices, iArr.Length * 2, iArr.Length * 2);
+
+                UploadMesh(ref mesh, false);
+                targetList.Add(mesh);
+
+                ListPool<float>.Return(vList);
+                ListPool<float>.Return(nList);
+                ListPool<float>.Return(tList);
+                ListPool<byte>.Return(cList);
+            }
+        }
     }
 
     public void Unload() {
@@ -1175,10 +1518,17 @@ internal class Chunk(int x, int y, int z) : IDisposable {
         lock (_lock) {
 
             if (_vLists != null) {
-
                 foreach (var l in _vLists) ListPool<float>.Return(l);
                 foreach (var l in _nLists!) ListPool<float>.Return(l);
                 foreach (var l in _tLists!) ListPool<float>.Return(l);
+                foreach (var l in _cLists!) ListPool<byte>.Return(l);
+            }
+
+            if (_vListsTrans != null) {
+                foreach (var l in _vListsTrans) ListPool<float>.Return(l);
+                foreach (var l in _nListsTrans!) ListPool<float>.Return(l);
+                foreach (var l in _tListsTrans!) ListPool<float>.Return(l);
+                foreach (var l in _cListsTrans!) ListPool<byte>.Return(l);
             }
         }
 
@@ -1189,13 +1539,26 @@ internal class Chunk(int x, int y, int z) : IDisposable {
     private unsafe void UnloadMeshGraphics() {
 
         foreach (var mesh in Meshes) {
+            FreeMesh(mesh);
+        }
 
+        Meshes.Clear();
+
+        foreach (var mesh in TransparentMeshes) {
+            FreeMesh(mesh);
+        }
+
+        TransparentMeshes.Clear();
+
+        return;
+
+        void FreeMesh(Mesh mesh) {
+            
             var copy = mesh;
             copy.Vertices = null;
             copy.Normals = null;
             copy.TexCoords = null;
             copy.Indices = null;
-
             copy.Colors = null;
             copy.Tangents = null;
             copy.TexCoords2 = null;
@@ -1212,8 +1575,6 @@ internal class Chunk(int x, int y, int z) : IDisposable {
             if (mesh.Colors != null) NativeMemory.Free(mesh.Colors);
             if (mesh.Indices != null) NativeMemory.Free(mesh.Indices);
         }
-
-        Meshes.Clear();
     }
 
     public void Dispose() {
@@ -1226,7 +1587,9 @@ internal class Chunk(int x, int y, int z) : IDisposable {
 
         System.Buffers.ArrayPool<Block>.Shared.Return(_blocks);
         System.Buffers.ArrayPool<ushort>.Shared.Return(_light!);
+        System.Buffers.ArrayPool<ushort>.Shared.Return(_renderLight!);
 
         _light = null;
+        _renderLight = null;
     }
 }

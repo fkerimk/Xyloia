@@ -1,15 +1,10 @@
 ﻿using System.Numerics;
 using Raylib_cs;
 using static Raylib_cs.Raylib;
-using Xyloia;
 
 internal static class Program {
 
-    public enum GameState {
-        Menu, Game
-    }
-
-    public static GameState State = GameState.Menu;
+    private static GameState _state = GameState.Menu;
 
     public static int Main() {
 
@@ -25,13 +20,14 @@ internal static class Program {
         Registry.Initialize(".");
         WorldGenConfig.Load(".");
 
-        var material = LoadMaterialDefault();
-        SetMaterialTexture(ref material, MaterialMapIndex.Albedo, Registry.AtlasTexture);
+        var chunkMaterial = LoadMaterialDefault();
+        SetMaterialTexture(ref chunkMaterial, MaterialMapIndex.Albedo, Registry.AtlasTexture);
 
         var chunkShader = LoadShader("Assets/Shaders/Chunk.vs", "Assets/Shaders/Chunk.fs");
+        Registry.EntityShader = LoadShader("Assets/Shaders/Entity.vs", "Assets/Shaders/Entity.fs");
 
-        material.Shader = chunkShader;
 
+        chunkMaterial.Shader = chunkShader;
         var crosshairTexture = LoadTexture("Assets/Textures/Crosshair.png");
 
         // Worlds
@@ -56,14 +52,16 @@ internal static class Program {
         var exit = false;
 
         var gui = new Gui();
+
         gui.RegisterAction(
             "StartGame",
             () => {
+
                 LoadGameWorld();
                 interaction.SetWorld(world!);
                 controller.SetWorld(world!);
                 spawned = false; // Trigger respawn logic
-                State = GameState.Game;
+                _state = GameState.Game;
                 gui.CloseAll(); // Close Main Menu
             }
         );
@@ -76,15 +74,16 @@ internal static class Program {
                 LoadMenuWorld();
 
                 if (world != null) {
+
                     controller.SetWorld(world);
                     interaction.SetWorld(world);
                 }
 
-                State = GameState.Menu;
+                _state = GameState.Menu;
             }
         );
 
-        // START IN MENU
+        // Start in menu
         gui.Open("Assets/GUI/Menu.json");
 
         var noclip = false;
@@ -104,16 +103,16 @@ internal static class Program {
             if (exit) break;
 
             // Cursor Management
-            if (gui.IsCursorFree || State == GameState.Menu) {
-                
+            if (gui.IsCursorFree || _state == GameState.Menu) {
+
                 if (IsCursorHidden()) EnableCursor();
-                
+
             } else {
-                
+
                 if (!IsCursorHidden()) DisableCursor();
             }
 
-            if (State == GameState.Menu) {
+            if (_state == GameState.Menu) {
 
                 BeginDrawing();
                 ClearBackground(Color.SkyBlue);
@@ -126,7 +125,7 @@ internal static class Program {
                 // Update menu world for loading chunks
                 world!.Update(cam.Position);
 
-                world!.Render(cam, material);
+                world!.Render(cam, chunkMaterial);
                 EndMode3D();
 
                 gui.Draw();
@@ -143,6 +142,11 @@ internal static class Program {
                     if (IsKeyPressed(KeyboardKey.L)) dynamicLight = !dynamicLight;
 
                     world!.UpdatePlayerLight(cam.Position, dynamicLight);
+
+                    if (IsKeyPressed(KeyboardKey.F1)) {
+
+                        world.SpawnEntity("TestEntity", controller.Position);
+                    }
 
                     world.Update(cam.Position);
 
@@ -168,16 +172,16 @@ internal static class Program {
                     noclip = !noclip;
 
                     if (noclip) {
-                        
+
                         // Switch to free cam
                         cam.Position = controller.CameraPosition;
                         var direction = controller.GetCameraTarget() - cam.Position;
                         direction = Vector3.Normalize(direction);
                         pitch = (float)Math.Asin(direction.Y);
                         yaw = (float)Math.Atan2(direction.Z, direction.X);
-                        
+
                     } else {
-                        
+
                         // Switch to character
                         controller.Position = cam.Position with { Y = cam.Position.Y - PlayerController.EyeHeight };
                         controller.Velocity = Vector3.Zero;
@@ -188,16 +192,19 @@ internal static class Program {
                 if (IsKeyPressed(KeyboardKey.Escape)) {
 
                     if (gui.HasMenuOpen) {
+
                         gui.Close();
+
                     } else {
+
                         gui.Open("Assets/GUI/Pause.json");
                     }
                 }
 
                 switch (gui.IsPaused) {
-                    
+
                     case false when noclip: {
-                        
+
                         var md = GetMouseDelta();
                         yaw += md.X * 0.005f;
                         pitch -= md.Y * 0.005f;
@@ -212,6 +219,7 @@ internal static class Program {
                             : IsKeyDown(KeyboardKey.LeftShift)
                                 ? 60f
                                 : 30f;
+
                         const float accel = 10.0f;
                         const float friction = 6.0f;
 
@@ -235,7 +243,7 @@ internal static class Program {
                     }
 
                     case false:
-                        
+
                         freeCamVelocity = Vector3.Zero; // Reset when not in use
                         cam.Position = controller.CameraPosition;
                         cam.Target = controller.GetCameraTarget();
@@ -247,7 +255,7 @@ internal static class Program {
                 ClearBackground(new Color(135, 206, 235, 255));
 
                 BeginMode3D(cam);
-                world!.Render(cam, material);
+                world!.Render(cam, chunkMaterial);
                 interaction.Draw3D();
                 DrawCompass();
                 EndMode3D();
@@ -256,7 +264,7 @@ internal static class Program {
                 gui.Draw();
 
                 if (!gui.HasMenuOpen) {
-                    
+
                     // HUD elements only when no menu is open
                     interaction.DrawUi();
 

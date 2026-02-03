@@ -7,4 +7,5 @@
     public string Facing { get; init; } = "Fixed";
     public int Yaw { get; init; } = 90;
     public string Connect { get; init; } = "";
+    public bool NotSimple { get; init; }
 }

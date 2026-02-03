@@ -1,33 +1,61 @@
 {
     "General": {
         "Seed": 1337,
-        "WaterLevel": 60
+        "WaterLevel": 64
     },
     "Terrain": {
         "Scale": 0.005,
-        "BaseHeight": 60,
-        "HeightAmplitude": 40,
-        "DetailScale": 0.03,
-        "DetailAmplitude": 10
+        "BaseHeight": 0,
+        "HeightAmplitude": 0,
+        "Octaves": 5,
+        "Persistence": 0.5,
+        "Lacunarity": 2.0
+    },
+    "Biomes": {
+        "Scale": 0.001,
+        "List": [
+            {
+                "Name": "Mountains",
+                "Threshold": 0.3,
+                "BaseHeight": 110,
+                "HeightAmplitude": 90,
+                "SurfaceBlock": "Snow",
+                "SubSurfaceBlock": "Stone",
+                "TransitionBlock": "GrassSnow"
+            },
+            {
+                "Name": "Plains",
+                "Threshold": -0.2,
+                "BaseHeight": 70,
+                "HeightAmplitude": 50,
+                "SurfaceBlock": "Grass",
+                "SubSurfaceBlock": "Dirt"
+            },
+            {
+                "Name": "Beach",
+                "Threshold": -1.0,
+                "BaseHeight": 60,
+                "HeightAmplitude": 5,
+                "SurfaceBlock": "Sand",
+                "SubSurfaceBlock": "Sand"
+            }
+        ]
     },
     "Caves": {
         "Enabled": true,
-        "ScaleX": 0.04,
-        "ScaleY": 0.06,
-        "ScaleZ": 0.04,
-        "Threshold": 0.6
+        "ScaleX": 0.015,
+        "ScaleY": 0.025,
+        "ScaleZ": 0.015,
+        "Threshold": 0.45,
+        "Octaves": 2
+    },
+    "Bedrock": {
+        "Block": "DeepSlate",
+        "MinHeight": 1,
+        "MaxHeight": 4,
+        "Scale": 0.1
     },
     "Layers": [
-        {
-            "Name": "Surface",
-            "Depth": 1,
-            "Block": "Grass"
-        },
-        {
-            "Name": "SubSurface",
-            "Depth": 4,
-            "Block": "Dirt"
-        },
         {
             "Name": "Deep",
             "Depth": 255,

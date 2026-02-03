@@ -1,0 +1,9 @@
+{
+	"parent": "Models/Block",
+	"textures": {
+		"all": "Textures/GrassSideSnow",
+		"u": "Textures/Snow",
+		"d": "Textures/Dirt",
+		"particle": "Textures/Dirt"
+	}
+}

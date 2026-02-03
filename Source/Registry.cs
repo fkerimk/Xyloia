@@ -5,6 +5,7 @@ using static Raylib_cs.Raylib;
 internal static class Registry {
 
     public static Texture2D AtlasTexture;
+    public static Shader EntityShader;
 
     private static readonly BlockInfo[] Blocks = new BlockInfo[256];
     private static readonly Dictionary<string, byte> BlockIdMap = [];
@@ -13,6 +14,8 @@ internal static class Registry {
 
     // 0:North(Z-), 1:East(X+), 2:South(Z+), 3:West(X-), 4:Up(Y+), 5:Down(Y-)
     private static readonly UvInfo[][] BlockFaceUvs = new UvInfo[256][];
+
+    private static readonly Dictionary<string, EntityInfo> Entities = [];
 
     public static void Initialize(string projectRoot) {
 
@@ -47,6 +50,7 @@ internal static class Registry {
                 ModelJson? model = null;
 
                 if (File.Exists(modelPath)) {
+                    
                     var modelJson = File.ReadAllText(modelPath);
                     model = JsonSerializer.Deserialize<ModelJson>(modelJson);
 
@@ -131,7 +135,8 @@ internal static class Registry {
                     Model = model,
                     Facing = Enum.TryParse<FacingMode>(blockDef.Facing, true, out var facing) ? facing : FacingMode.Fixed,
                     Yaw = blockDef.Yaw,
-                    Connect = blockDef.Connect
+                    Connect = blockDef.Connect,
+                    NotSimple = blockDef.NotSimple
                 };
 
                 loadedBlocks.Add(info);
@@ -192,9 +197,36 @@ internal static class Registry {
                 break;
             }
 
-            if (b.Model is { Elements.Count: 1 }) {
+            if (b is { Model: { Elements.Count: 1 }, NotSimple: false }) {
 
                 b.Simple = true;
+            }
+        }
+
+        // Load Entities
+        var entitiesDir = Path.Combine(projectRoot, "Assets/Entities");
+
+        if (Directory.Exists(entitiesDir)) {
+            
+            var entityFiles = Directory.GetFiles(entitiesDir, "*.json");
+
+            foreach (var file in entityFiles) {
+                
+                try {
+                    
+                    var json = File.ReadAllText(file);
+                    var entityDef = JsonSerializer.Deserialize<EntityJson>(json);
+
+                    if (entityDef == null) continue;
+
+                    var name = Path.GetFileNameWithoutExtension(file);
+                    var modelPath = Path.Combine(projectRoot, "Assets/Models", entityDef.Model + ".glb");
+
+                    Entities[name.ToLower()] = new EntityInfo { Name = name, ModelPath = modelPath };
+                    
+                } catch (Exception) {
+                    // Ignore
+                }
             }
         }
     }
@@ -215,10 +247,6 @@ internal static class Registry {
         }
 
         if (!TextureMap.TryGetValue(texRef, out var atlasUv)) return new UvInfo();
-
-        // Face UV is in pixels 0-16. 
-        // Maps the sub-region to the Atlas UV region.
-        // AtlasUv provides X, Y, W, H in 0-1 range.
 
         // Resolve sub-UVs (0-16 pixels)
         var u0 = face.Uv[0];
@@ -355,4 +383,6 @@ internal static class Registry {
 
         return Blocks[id].ConnectIds.Contains(neighborId);
     }
+
+    public static EntityInfo? GetEntityInfo(string name) { return Entities.GetValueOrDefault(name.ToLower()); }
 }
