@@ -16,7 +16,6 @@ internal class BlockInfo {
     public readonly HashSet<byte> ConnectIds = [];
     public bool Full = false;
     public bool Simple = false;
-    public bool NotSimple;
 }
 
 internal enum FacingMode {

@@ -1,8 +1,23 @@
 {
-    "Model": "Debug",
-    "Luminance": [255, 0, 0],
+    "Model": {
+
+        "Main": "Debug",
+        "Opaque": true,
+        "Simple": true,
+        "Connect": ""
+    },
+
+    "Rotation": {
+
+        "Facing": "Fixed",
+
+        "Yaw": {
+
+            "Angle": 90
+        }
+    },
+
     "Solid": true,
-    "Opaque": true,
-    "Facing": "Fixed",
-    "Yaw": 90
+    
+    "Luminance": [255, 0, 0]
 }

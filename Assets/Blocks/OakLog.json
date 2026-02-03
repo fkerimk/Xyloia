@@ -1,4 +1,11 @@
 {
-    "Model": "OakLog",
-    "Facing": "Rotate"
+    "Model": {
+
+        "Main": "OakLog"
+    },
+
+    "Rotation": {
+
+        "Facing": "Rotate"
+    }
 }

@@ -1,7 +1,11 @@
 {
-    "Model": "WaterLevel16",
-    "Solid": false,
-    "Opaque": false,
-    "Connect": "Water",
-    "NotSimple": true
+    "Model": {
+
+        "Main": "WaterLevel16",
+        "Opaque": false,
+        "Simple": false,
+        "Connect": "Water"
+    },
+
+    "Solid": false
 }

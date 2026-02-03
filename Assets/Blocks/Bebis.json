@@ -1,7 +1,20 @@
 {
-    "Model": "Bebis",
-    "Opaque": false,
-    "Facing": "Yaw",
-    "Yaw": 45,
+    "Model": {
+
+        "Main": "Bebis",
+        "Opaque": false,
+        "Simple": false
+    },
+
+    "Rotation": {
+
+        "Facing": "Yaw",
+
+        "Yaw": {
+
+            "Angle": 45
+        }
+    },
+
     "Luminance": [255, 255, 0]
 }

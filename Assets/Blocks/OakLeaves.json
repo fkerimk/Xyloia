@@ -1,5 +1,9 @@
 {
-    "Model": "OakLeaves",
-    "Opaque": false,
-    "Connect": "OakLeaves"
+    "Model": {
+
+        "Main": "OakLeaves",
+        "Opaque": false,
+        "Simple": false,
+        "Connect": "OakLeaves"
+    }
 }

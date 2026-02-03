@@ -1,3 +1,6 @@
 {
-    "Model": "Snow"
+    "Model": {
+
+        "Main": "Snow"
+    }
 }

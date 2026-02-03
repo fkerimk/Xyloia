@@ -1,6 +1,17 @@
 {
-    "Model": "Test",
-    "Opaque": false,
-    "Facing": "Yaw",
-    "Yaw": 45
+    "Model": {
+
+        "Main": "Test",
+        "Opaque": false
+    },
+
+    "Rotation": {
+
+        "Facing": "Yaw",
+
+        "Yaw": {
+
+            "Angle": 45
+        }
+    }
 }

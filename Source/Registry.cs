@@ -46,11 +46,11 @@ internal static class Registry {
                 var name = Path.GetFileNameWithoutExtension(file); // Case-sensitive from file name
 
                 // Load Model
-                var modelPath = Path.Combine(modelsDir, blockDef.Model + ".json");
+                var modelPath = Path.Combine(modelsDir, blockDef.Model.Main + ".json");
                 ModelJson? model = null;
 
                 if (File.Exists(modelPath)) {
-                    
+
                     var modelJson = File.ReadAllText(modelPath);
                     model = JsonSerializer.Deserialize<ModelJson>(modelJson);
 
@@ -124,19 +124,19 @@ internal static class Registry {
                     }
                 }
 
-                var lum = new Color((int)Math.Clamp(blockDef.Luminance[0] * 255, 0, 255), (int)Math.Clamp(blockDef.Luminance[1] * 255, 0, 255), (int)Math.Clamp(blockDef.Luminance[2] * 255, 0, 255), 255);
+                var lum = new Color((int)Math.Clamp(blockDef.Luminance[0], 0, 255), (int)Math.Clamp(blockDef.Luminance[1], 0, 255), (int)Math.Clamp(blockDef.Luminance[2], 0, 255), 255);
 
                 var info = new BlockInfo {
                     Id = nextId++,
                     Name = name,
                     Solid = blockDef.Solid,
-                    Opaque = blockDef.Opaque,
+                    Opaque = blockDef.Model.Opaque,
                     Luminance = lum,
                     Model = model,
-                    Facing = Enum.TryParse<FacingMode>(blockDef.Facing, true, out var facing) ? facing : FacingMode.Fixed,
-                    Yaw = blockDef.Yaw,
-                    Connect = blockDef.Connect,
-                    NotSimple = blockDef.NotSimple
+                    Facing = Enum.TryParse<FacingMode>(blockDef.Rotation.Facing, true, out var facing) ? facing : FacingMode.Fixed,
+                    Yaw = blockDef.Rotation.Yaw.Angle,
+                    Connect = blockDef.Model.Connect,
+                    Simple = blockDef.Model.Simple
                 };
 
                 loadedBlocks.Add(info);
@@ -196,24 +196,19 @@ internal static class Registry {
 
                 break;
             }
-
-            if (b is { Model: { Elements.Count: 1 }, NotSimple: false }) {
-
-                b.Simple = true;
-            }
         }
 
         // Load Entities
         var entitiesDir = Path.Combine(projectRoot, "Assets/Entities");
 
         if (Directory.Exists(entitiesDir)) {
-            
+
             var entityFiles = Directory.GetFiles(entitiesDir, "*.json");
 
             foreach (var file in entityFiles) {
-                
+
                 try {
-                    
+
                     var json = File.ReadAllText(file);
                     var entityDef = JsonSerializer.Deserialize<EntityJson>(json);
 
@@ -223,7 +218,7 @@ internal static class Registry {
                     var modelPath = Path.Combine(projectRoot, "Assets/Models", entityDef.Model + ".glb");
 
                     Entities[name.ToLower()] = new EntityInfo { Name = name, ModelPath = modelPath };
-                    
+
                 } catch (Exception) {
                     // Ignore
                 }

@@ -1,3 +1,6 @@
 {
-    "Model": "GrassSnow"
+    "Model": {
+
+        "Main": "GrassSnow"
+    }
 }
